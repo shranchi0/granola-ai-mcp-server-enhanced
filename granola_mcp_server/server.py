@@ -1612,11 +1612,8 @@ class GranolaMCPServer:
                 "end_date": now.strftime("%Y-%m-%d")
             }
         
-        # Check cache first (cache key includes category and date range)
-        cache_key = f"{category}_{date_range.get('start_date', '')}_{date_range.get('end_date', '')}"
+        # Cache check moved earlier for fast path
         matching_ids = None
-        if cache_key in self._gpt_category_cache:
-            matching_ids = self._gpt_category_cache[cache_key]
         
         try:
             # Filter meetings by date range
@@ -1646,10 +1643,10 @@ class GranolaMCPServer:
                     text=f"No meetings found in the specified date range"
                 )]
             
-            # Build context for GPT - include all meetings in date range (up to 100 for performance)
+            # Build context for GPT - optimize for speed: limit meetings and context size
             meeting_contexts = []
-            # Sort by date (most recent first) and limit to 100 meetings for GPT analysis
-            sorted_meetings = sorted(meetings_to_analyze, key=lambda x: x[1].date, reverse=True)[:100]
+            # Sort by date (most recent first) and limit to 60 meetings for faster GPT processing
+            sorted_meetings = sorted(meetings_to_analyze, key=lambda x: x[1].date, reverse=True)[:60]
             
             for meeting_id, meeting in sorted_meetings:
                 context = {
@@ -1659,17 +1656,27 @@ class GranolaMCPServer:
                     "participants": meeting.participants
                 }
                 
-                # Add document content if available (increased for better categorization)
+                # Add document content if available (optimized: 4k chars balances speed and accuracy)
                 if meeting_id in self.cache_data.documents:
                     doc = self.cache_data.documents[meeting_id]
                     if doc.content:
-                        context["notes"] = doc.content[:6000]  # Increased for better analysis
+                        # Take first 4k chars (usually contains company description) + last 1k (often has key details)
+                        content = doc.content
+                        if len(content) > 5000:
+                            context["notes"] = content[:4000] + "\n...\n" + content[-1000]
+                        else:
+                            context["notes"] = content[:4000]
                 
-                # Add transcript snippet if available (increased for better categorization)
+                # Add transcript snippet if available (optimized: 4k chars)
                 if meeting_id in self.cache_data.transcripts:
                     transcript = self.cache_data.transcripts[meeting_id]
                     if transcript.content:
-                        context["transcript"] = transcript.content[:6000]  # Increased for better analysis
+                        # Take first 4k chars (usually contains company description) + last 1k (often has key details)
+                        content = transcript.content
+                        if len(content) > 5000:
+                            context["transcript"] = content[:4000] + "\n...\n" + content[-1000]
+                        else:
+                            context["transcript"] = content[:4000]
                 
                 meeting_contexts.append(context)
             
@@ -1705,13 +1712,15 @@ Example: {{"meeting_ids": ["id1", "id2", "id3", "id4", "id5", "id6", "id7"]}}
 
 If multiple companies match, include them all. Be generous in your categorization."""
 
+                # Use GPT-5 with optimized settings for faster response
                 response = self.openai_client.chat.completions.create(
                     model="gpt-5",  # Using GPT-5 for best intelligence and accuracy
                     messages=[
-                        {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array. Return ALL companies that match the category, not just one."},
+                        {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array. Return ALL companies that match the category, not just one. Be fast and efficient."},
                         {"role": "user", "content": prompt}
                     ],
-                    response_format={"type": "json_object"}
+                    response_format={"type": "json_object"},
+                    max_tokens=500  # Limit response size for faster processing
                     # Note: GPT-5 doesn't support custom temperature, uses default
                 )
                 
