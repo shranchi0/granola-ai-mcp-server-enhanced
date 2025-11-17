@@ -433,17 +433,6 @@ class GranolaMCPServer:
                         },
                         "required": ["category"]
                     }
-                ),
-                                "description": "Optional date range to filter meetings (e.g., last 2 weeks, last month)"
-                            },
-                            "limit": {
-                                "type": "integer",
-                                "description": "Maximum number of companies to return",
-                                "default": 20
-                            }
-                        },
-                        "required": ["category"]
-                    }
                 )
             ]
         
