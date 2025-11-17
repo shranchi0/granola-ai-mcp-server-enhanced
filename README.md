@@ -35,6 +35,8 @@ An enhanced Model Context Protocol (MCP) server for integrating Granola.ai meeti
 
 ## Quick Start
 
+> **👥 For Teams**: See [TEAM_SETUP.md](TEAM_SETUP.md) for team setup instructions. Each person needs their own Google Calendar credentials.
+
 ### Prerequisites
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) package manager
@@ -98,6 +100,8 @@ An enhanced Model Context Protocol (MCP) server for integrating Granola.ai meeti
 5. **Restart Claude Desktop** to load the MCP server
 
 ### Setting Up Google Calendar Integration
+
+**Important for Teams**: Each team member needs to set up their own Google Calendar credentials. Credentials cannot be shared between users.
 
 To enable Google Calendar integration for upcoming meetings:
 

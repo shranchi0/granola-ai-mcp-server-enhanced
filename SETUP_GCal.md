@@ -120,7 +120,7 @@ You have two options - choose the easiest for you:
 
 1. **Run the helper script**
    ```bash
-   cd /Users/shrikolanukuduru/Desktop/granola-ai-mcp-server
+   cd /path/to/granola-ai-mcp-server
    uv run python get_refresh_token.py
    ```
 
@@ -136,20 +136,21 @@ You have two options - choose the easiest for you:
 ## Step 6: Update Claude Desktop Config
 
 1. **Open Claude Desktop Config**
-   - File location: `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - Or: `/Users/shrikolanukuduru/Library/Application Support/Claude/claude_desktop_config.json`
+   - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+   - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+   - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
 2. **Add Google Credentials**
-   Update the `env` section to include your credentials:
+   Update the `env` section to include your credentials. Replace paths with your actual paths:
 
    ```json
    {
      "mcpServers": {
        "granola": {
-         "command": "/Users/shrikolanukuduru/.local/bin/uv",
+         "command": "uv",
          "args": [
            "--directory",
-           "/Users/shrikolanukuduru/Desktop/granola-ai-mcp-server",
+           "/absolute/path/to/granola-ai-mcp-server",
            "run",
            "granola-mcp-server"
          ],
