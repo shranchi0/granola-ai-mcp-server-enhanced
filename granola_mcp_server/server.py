@@ -1597,7 +1597,7 @@ Return a JSON object with a "meeting_ids" array containing the matching meeting 
 Example: {{"meeting_ids": ["id1", "id2", "id3"]}}"""
 
             response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",  # Using mini for cost efficiency, can upgrade to gpt-4o if needed
+                model="gpt-4o",  # Using GPT-4o for best intelligence and accuracy
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array."},
                     {"role": "user", "content": prompt}
