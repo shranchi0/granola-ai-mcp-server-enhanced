@@ -1603,6 +1603,12 @@ class GranolaMCPServer:
         if not self.cache_data or not self.cache_data.meetings:
             return [TextContent(type="text", text="No meetings found in cache")]
         
+        # Check cache first (cache key includes category and date range)
+        cache_key = f"{category}_{date_range.get('start_date', '')}_{date_range.get('end_date', '')}" if date_range else category
+        matching_ids = None
+        if cache_key in self._gpt_category_cache:
+            matching_ids = self._gpt_category_cache[cache_key]
+        
         try:
             # Filter meetings by date range if provided
             meetings_to_analyze = []
@@ -1659,7 +1665,7 @@ class GranolaMCPServer:
                 meeting_contexts.append(context)
             
             # Use GPT to analyze which meetings match the category (only if not cached)
-            if matching_ids is None:
+            if matching_ids is None or len(matching_ids) == 0:
                 prompt = f"""You are analyzing meeting records to find companies that match a specific category.
 
 Category to find: {category}
