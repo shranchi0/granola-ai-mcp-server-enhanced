@@ -129,7 +129,12 @@ class GranolaMCPServer:
             creds.refresh(Request())
             return creds
         except Exception as e:
-            print(f"Error getting Google credentials: {e}")
+            error_msg = str(e)
+            if 'deleted_client' in error_msg:
+                print(f"Error: Google OAuth client was deleted. Please set up new credentials.")
+                print(f"See GOOGLE_CALENDAR_SETUP.md for instructions.")
+            else:
+                print(f"Error getting Google credentials: {e}")
             return None
     
     async def _fetch_calendar_events(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
@@ -689,7 +694,14 @@ class GranolaMCPServer:
                 
                 if upcoming_this_week:
                     output_lines.append(f"## Upcoming This Week ({week_start} - {week_end})\n")
-                    upcoming_this_week.sort(key=lambda x: x[1].date)  # Sort ascending (earliest first)
+                    # Sort by date, handling both timezone-aware and naive datetimes
+                    def get_sort_date(item):
+                        date = item[1].date
+                        if date.tzinfo is None:
+                            # Make naive datetime timezone-aware for comparison
+                            return date.replace(tzinfo=self.local_timezone)
+                        return date
+                    upcoming_this_week.sort(key=lambda x: get_sort_date(x))  # Sort ascending (earliest first)
                     for score, meeting in upcoming_this_week:
                         meeting_local_date = self._convert_to_local_time(meeting.date)
                         source_label = "📅 Calendar" if hasattr(meeting, 'source') and meeting.source == 'google_calendar' else "🎙️ Granola"
@@ -706,7 +718,14 @@ class GranolaMCPServer:
                         output_lines.append("\n## Past This Week\n")
                     else:
                         output_lines.append(f"## Meetings This Week ({week_start} - {week_end})\n")
-                    past_this_week.sort(key=lambda x: x[1].date, reverse=True)  # Sort descending (most recent first)
+                    # Sort by date, handling both timezone-aware and naive datetimes
+                    def get_sort_date(item):
+                        date = item[1].date
+                        if date.tzinfo is None:
+                            # Make naive datetime timezone-aware for comparison
+                            return date.replace(tzinfo=self.local_timezone)
+                        return date
+                    past_this_week.sort(key=lambda x: get_sort_date(x), reverse=True)  # Sort descending (most recent first)
                     for score, meeting in past_this_week:
                         source_label = "📅 Calendar" if hasattr(meeting, 'source') and meeting.source == 'google_calendar' else "🎙️ Granola"
                         output_lines.append(f"• **{meeting.title}** {source_label}")
@@ -745,7 +764,13 @@ class GranolaMCPServer:
                         upcoming_calendar = [e for e in calendar_events if self._convert_to_local_time(e['date']) > now]
                         if upcoming_calendar:
                             output_lines = [f"## Upcoming This Week ({week_start} - {week_end})\n\n"]
-                            upcoming_calendar.sort(key=lambda x: x['date'])
+                            # Sort by date, ensuring timezone-aware
+                            def get_event_date(event):
+                                date = event['date']
+                                if date.tzinfo is None:
+                                    return date.replace(tzinfo=self.local_timezone)
+                                return date
+                            upcoming_calendar.sort(key=get_event_date)
                             for event in upcoming_calendar[:limit]:
                                 event_local_date = self._convert_to_local_time(event['date'])
                                 output_lines.append(f"• **{event['title']}** 📅 Calendar")
