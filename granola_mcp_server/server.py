@@ -1676,27 +1676,27 @@ class GranolaMCPServer:
                     "participants": meeting.participants
                 }
                 
-                # Add document content if available (optimized: 4k chars balances speed and accuracy)
+                # Add document content if available (increased to 5k for better categorization)
                 if meeting_id in self.cache_data.documents:
                     doc = self.cache_data.documents[meeting_id]
                     if doc.content:
-                        # Take first 4k chars (usually contains company description) + last 1k (often has key details)
+                        # Take first 5k chars (usually contains company description) + last 1.5k (often has key details)
                         content = doc.content
-                        if len(content) > 5000:
-                            context["notes"] = content[:4000] + "\n...\n" + content[-1000]
+                        if len(content) > 6500:
+                            context["notes"] = content[:5000] + "\n...\n" + content[-1500]
                         else:
-                            context["notes"] = content[:4000]
+                            context["notes"] = content[:6500]
                 
-                # Add transcript snippet if available (optimized: 4k chars)
+                # Add transcript snippet if available (increased to 5k for better categorization)
                 if meeting_id in self.cache_data.transcripts:
                     transcript = self.cache_data.transcripts[meeting_id]
                     if transcript.content:
-                        # Take first 4k chars (usually contains company description) + last 1k (often has key details)
+                        # Take first 5k chars (usually contains company description) + last 1.5k (often has key details)
                         content = transcript.content
-                        if len(content) > 5000:
-                            context["transcript"] = content[:4000] + "\n...\n" + content[-1000]
+                        if len(content) > 6500:
+                            context["transcript"] = content[:5000] + "\n...\n" + content[-1500]
                         else:
-                            context["transcript"] = content[:4000]
+                            context["transcript"] = content[:6500]
                 
                 meeting_contexts.append(context)
             
