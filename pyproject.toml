@@ -22,3 +22,6 @@ dependencies = [
 
 [project.scripts]
 granola-mcp-server = "granola_mcp_server.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["granola_mcp_server"]
