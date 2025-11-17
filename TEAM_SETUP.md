@@ -48,16 +48,20 @@ Each person needs to update their Claude Desktop config with their own paths:
 
 **Replace** `/YOUR/ABSOLUTE/PATH/TO/` with your actual path to the cloned repository.
 
-### Step 3: Google Calendar (Optional - 15 minutes per person)
+### Step 3: Google Calendar (Optional - 5-15 minutes per person)
 
-If team members want Google Calendar integration:
+**Easiest Method - Use Interactive Script:**
+```bash
+uv run python setup_google_calendar.py
+```
 
-1. Each person creates their own Google Cloud project (or you can share one project)
-2. Each person creates their own OAuth credentials
-3. Each person gets their own refresh token
-4. Each person adds their credentials to their own Claude Desktop config
+This script guides you through everything automatically!
 
-**Note**: You can share a Google Cloud project, but each person still needs their own OAuth client and refresh token.
+**For Teams - Shared Project Setup:**
+See [TEAM_GOOGLE_SETUP.md](TEAM_GOOGLE_SETUP.md) for simplified team setup using a shared Google Cloud project.
+
+**Individual Setup:**
+Each person can create their own project following [SETUP_GCal.md](SETUP_GCal.md), or use the interactive script above.
 
 ## Quick Setup Checklist
 

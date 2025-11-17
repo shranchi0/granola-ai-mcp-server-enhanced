@@ -73,21 +73,16 @@ An enhanced Model Context Protocol (MCP) server that brings your Granola.ai meet
 
 ### Google Calendar Setup (Optional)
 
-To enable upcoming calendar events:
+**Easy Setup (Recommended):**
+```bash
+uv run python setup_google_calendar.py
+```
 
+This interactive script guides you through the entire process step-by-step and can automatically update your Claude Desktop config.
+
+**Manual Setup:**
 1. Follow the detailed guide: [SETUP_GCal.md](SETUP_GCal.md)
-2. Or use the quick helper script:
-   ```bash
-   uv run python get_refresh_token.py
-   ```
-3. Add credentials to your Claude Desktop config `env` section:
-   ```json
-   "env": {
-     "GOOGLE_CLIENT_ID": "your-client-id",
-     "GOOGLE_CLIENT_SECRET": "your-client-secret",
-     "GOOGLE_REFRESH_TOKEN": "your-refresh-token"
-   }
-   ```
+2. Or use the helper script: `uv run python get_refresh_token.py`
 
 > **👥 For Teams**: See [TEAM_SETUP.md](TEAM_SETUP.md) for team onboarding. Each person needs their own Google Calendar credentials.
 
