@@ -1663,10 +1663,10 @@ class GranolaMCPServer:
                     text=f"No meetings found in the specified date range"
                 )]
             
-            # Build context for GPT - include all meetings in date range (up to 80 for balance)
+            # Build context for GPT - include all meetings in date range (up to 100 for comprehensive coverage)
             meeting_contexts = []
-            # Sort by date (most recent first) and include up to 80 meetings for comprehensive analysis
-            sorted_meetings = sorted(meetings_to_analyze, key=lambda x: x[1].date, reverse=True)[:80]
+            # Sort by date (most recent first) and include up to 100 meetings to match Granola's thoroughness
+            sorted_meetings = sorted(meetings_to_analyze, key=lambda x: x[1].date, reverse=True)[:100]
             
             for meeting_id, meeting in sorted_meetings:
                 context = {
@@ -1687,26 +1687,32 @@ class GranolaMCPServer:
                         else:
                             context["notes"] = content[:6500]
                 
-                # Add transcript snippet if available (increased to 5k for better categorization)
+                # Add transcript snippet if available (use more content - transcripts are key for categorization)
                 if meeting_id in self.cache_data.transcripts:
                     transcript = self.cache_data.transcripts[meeting_id]
                     if transcript.content:
-                        # Take first 5k chars (usually contains company description) + last 1.5k (often has key details)
+                        # Use more transcript content - Granola relies heavily on transcripts
+                        # Take first 8k chars (company description, product details) + last 2k (key takeaways)
                         content = transcript.content
-                        if len(content) > 6500:
-                            context["transcript"] = content[:5000] + "\n...\n" + content[-1500]
+                        if len(content) > 10000:
+                            context["transcript"] = content[:8000] + "\n...\n" + content[-2000]
                         else:
-                            context["transcript"] = content[:6500]
+                            context["transcript"] = content  # Use full transcript if under 10k
                 
                 meeting_contexts.append(context)
             
             # Use GPT to analyze which meetings match the category (only if not cached)
             if matching_ids is None or len(matching_ids) == 0:
-                prompt = f"""You are analyzing meeting records to find companies that match a specific category.
+                prompt = f"""You are analyzing meeting transcripts and notes to find companies that match a specific category.
 
 Category to find: {category}
 
-Analyze EVERY meeting below. For each meeting, determine if the company discussed matches this category.
+IMPORTANT: Read the TRANSCRIPTS carefully - they contain the actual conversation about what each company does. The transcripts are the primary source of information.
+
+For each meeting, analyze:
+1. The transcript content (most important - contains actual discussion about the company)
+2. The meeting title (may contain company name)
+3. Any notes or documents (if available)
 
 Be VERY INCLUSIVE and broad. Include companies if they match ANY of these criteria:
 - Build tools for developers, engineers, or technical teams
@@ -1717,22 +1723,26 @@ Be VERY INCLUSIVE and broad. Include companies if they match ANY of these criter
 - Create AI/ML development tools or platforms
 - Build application platforms, spreadsheets, or tools with coding capabilities
 - Any company whose primary customers are developers or engineers
-- Companies that mention "developers", "engineers", "SDK", "API", "platform", "tools", "infrastructure" in their description
+- Companies that mention "developers", "engineers", "SDK", "API", "platform", "tools", "infrastructure" in transcript or description
+- Companies building agent platforms, AI development tools, or ML infrastructure
+- Companies with developer-facing products even if they also serve other markets
 
 CRITICAL INSTRUCTIONS:
-1. Return ALL companies that match, not just one
-2. If you're unsure whether a company matches, INCLUDE IT (be generous)
-3. Look for ANY mention of developer tools, platforms, SDKs, APIs, or developer-focused products
-4. Include both pure devtools AND developer-adjacent companies
-5. Review ALL {len(meeting_contexts)} meetings - don't skip any
+1. Read the TRANSCRIPT content carefully - this is where company details are discussed
+2. Return ALL companies that match, not just one
+3. If you're unsure whether a company matches, INCLUDE IT (be generous)
+4. Look for ANY mention in transcripts of developer tools, platforms, SDKs, APIs, or developer-focused products
+5. Include both pure devtools AND developer-adjacent companies
+6. Review ALL {len(meeting_contexts)} meetings systematically - don't skip any
+7. Pay special attention to what the company actually does (from transcript), not just keywords
 
 Meeting data:
 {json.dumps(meeting_contexts, indent=2, default=str)}
 
-Return a JSON object with a "meeting_ids" array containing ALL matching meeting IDs.
-Example: {{"meeting_ids": ["id1", "id2", "id3", "id4", "id5", "id6", "id7", "id8"]}}
+Return a JSON object with a "meeting_ids" array containing ALL matching meeting IDs, ordered by relevance.
+Example: {{"meeting_ids": ["id1", "id2", "id3", "id4", "id5", "id6", "id7", "id8", "id9", "id10"]}}
 
-IMPORTANT: Include ALL meetings where the company could reasonably be considered a match. Be very generous."""
+IMPORTANT: Include ALL meetings where the company could reasonably be considered a match. Be very generous and thorough."""
 
                 # Use GPT-5 with optimized settings
                 response = self.openai_client.chat.completions.create(
