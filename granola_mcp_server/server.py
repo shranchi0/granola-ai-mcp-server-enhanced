@@ -536,16 +536,17 @@ class GranolaMCPServer:
                     # Check ALL fields (not elif) to combine content from multiple sources
                     content_parts = []
                     
-                    # Try notes_plain (cleanest format)
+                    # Try notes_plain (cleanest format) - prioritize this
                     notes_plain = doc_data.get("notes_plain")
-                    if notes_plain and isinstance(notes_plain, str) and notes_plain.strip():
+                    if notes_plain is not None and isinstance(notes_plain, str) and notes_plain.strip():
                         content_parts.append(notes_plain.strip())
                     
                     # Try notes_markdown
                     notes_markdown = doc_data.get("notes_markdown")
-                    if notes_markdown and isinstance(notes_markdown, str) and notes_markdown.strip():
+                    if notes_markdown is not None and isinstance(notes_markdown, str) and notes_markdown.strip():
                         # Only add if we don't already have notes_plain (to avoid duplicates)
-                        if not notes_plain or not notes_plain.strip():
+                        notes_plain_val = doc_data.get("notes_plain") or ""
+                        if not isinstance(notes_plain_val, str) or not notes_plain_val.strip():
                             content_parts.append(notes_markdown.strip())
                     
                     # Try to extract from structured notes field (check multiple possible structures)
