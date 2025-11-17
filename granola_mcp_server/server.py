@@ -1612,13 +1612,15 @@ For each meeting, determine if the company discussed matches this category. Cons
 - Industry/vertical
 - Technology stack (if relevant)
 
-Return a JSON array of meeting IDs that match, ordered by relevance. Only include meetings where you're confident the company matches the category.
+CRITICAL: Return ALL companies that match this category, not just one. Include every meeting where the company matches the category description. Be thorough and comprehensive.
 
 Meeting data:
 {json.dumps(meeting_contexts, indent=2, default=str)}
 
-Return a JSON object with a "meeting_ids" array containing the matching meeting IDs, ordered by relevance.
-Example: {{"meeting_ids": ["id1", "id2", "id3"]}}"""
+Return a JSON object with a "meeting_ids" array containing ALL matching meeting IDs, ordered by relevance (most relevant first).
+Example: {{"meeting_ids": ["id1", "id2", "id3", "id4", "id5"]}}
+
+If multiple companies match, include them all."""
 
             response = self.openai_client.chat.completions.create(
                 model="gpt-5",  # Using GPT-5 for best intelligence and accuracy
