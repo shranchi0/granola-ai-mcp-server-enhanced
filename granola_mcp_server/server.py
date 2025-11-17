@@ -2,6 +2,7 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
@@ -107,7 +108,7 @@ class GranolaMCPServer:
                 return zoneinfo.ZoneInfo(offset_mapping[hours_offset])
                 
         except Exception as e:
-            print(f"Error detecting timezone: {e}")
+            sys.stderr.write(f"Error detecting timezone: {e}\n")
         
         # Ultimate fallback to Eastern Time (common for US business)
         return zoneinfo.ZoneInfo('America/New_York')
@@ -131,10 +132,10 @@ class GranolaMCPServer:
         except Exception as e:
             error_msg = str(e)
             if 'deleted_client' in error_msg:
-                print(f"Error: Google OAuth client was deleted. Please set up new credentials.")
-                print(f"See GOOGLE_CALENDAR_SETUP.md for instructions.")
+                sys.stderr.write(f"Error: Google OAuth client was deleted. Please set up new credentials.\n")
+                sys.stderr.write(f"See GOOGLE_CALENDAR_SETUP.md for instructions.\n")
             else:
-                print(f"Error getting Google credentials: {e}")
+                sys.stderr.write(f"Error getting Google credentials: {e}\n")
             return None
     
     async def _fetch_calendar_events(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
@@ -191,7 +192,7 @@ class GranolaMCPServer:
             
             return calendar_meetings
         except Exception as e:
-            print(f"Error fetching calendar events: {e}")
+            sys.stderr.write(f"Error fetching calendar events: {e}\n")
             return []
     
     def _convert_to_local_time(self, utc_datetime: datetime) -> datetime:
@@ -353,7 +354,7 @@ class GranolaMCPServer:
             
         except Exception as e:
             self.cache_data = CacheData()
-            print(f"Error loading cache: {e}")
+            sys.stderr.write(f"Error loading cache: {e}\n")
     
     async def _parse_cache_data(self, raw_data: Dict[str, Any]) -> CacheData:
         """Parse raw cache data into structured models."""
@@ -389,7 +390,7 @@ class GranolaMCPServer:
                     )
                     cache_data.meetings[meeting_id] = metadata
                 except Exception as e:
-                    print(f"Error parsing meeting {meeting_id}: {e}")
+                    sys.stderr.write(f"Error parsing meeting {meeting_id}: {e}\n")
         
         # Parse Granola transcripts (list format)
         if "transcripts" in raw_data:
@@ -442,7 +443,7 @@ class GranolaMCPServer:
                         cache_data.transcripts[meeting_id] = transcript
                         
                 except Exception as e:
-                    print(f"Error parsing transcript {transcript_id}: {e}")
+                    sys.stderr.write(f"Error parsing transcript {transcript_id}: {e}\n")
         
         # Extract document content from Granola documents
         if "documents" in raw_data:
@@ -515,12 +516,12 @@ class GranolaMCPServer:
                         
                         # Debug: log if we couldn't find content
                         if not content:
-                            print(f"Warning: No content found for meeting {doc_id} ({meeting.title}). Available fields: {list(doc_data.keys())}")
+                            sys.stderr.write(f"Warning: No content found for meeting {doc_id} ({meeting.title}). Available fields: {list(doc_data.keys())}\n")
                         
                 except Exception as e:
-                    print(f"Error extracting document content for {doc_id}: {e}")
+                    sys.stderr.write(f"Error extracting document content for {doc_id}: {e}\n")
                     import traceback
-                    traceback.print_exc()
+                    traceback.print_exc(file=sys.stderr)
         
         cache_data.last_updated = datetime.now()
         return cache_data
@@ -548,7 +549,7 @@ class GranolaMCPServer:
             return extract_text_from_content(notes_data['content'])
             
         except Exception as e:
-            print(f"Error extracting structured notes: {e}")
+            sys.stderr.write(f"Error extracting structured notes: {e}\n")
             return ""
     
     def _parse_date_query(self, query: str) -> Optional[Tuple[datetime, datetime]]:
@@ -690,7 +691,7 @@ class GranolaMCPServer:
                 try:
                     calendar_events = await self._fetch_calendar_events(date_range[0], date_range[1])
                 except Exception as e:
-                    print(f"Error fetching calendar events: {e}")
+                    sys.stderr.write(f"Error fetching calendar events: {e}\n")
             
             # Separate past and upcoming meetings within this week
             for score, meeting in results:
@@ -812,7 +813,7 @@ class GranolaMCPServer:
                                 output_lines.append("")
                             return [TextContent(type="text", text="\n".join(output_lines))]
                     except Exception as e:
-                        print(f"Error fetching calendar events: {e}")
+                        sys.stderr.write(f"Error fetching calendar events: {e}\n")
                 
                 output_lines = [f"No recorded meetings found for this week ({week_start} - {week_end}).\n\n"]
                 if not self.google_calendar_enabled:
