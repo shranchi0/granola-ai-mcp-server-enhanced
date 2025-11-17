@@ -3,10 +3,11 @@
 import json
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Any
-from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime, timedelta
 import zoneinfo
 import time
+import re
 
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
@@ -19,11 +20,26 @@ from mcp.types import (
 
 from .models import CacheData, MeetingMetadata, MeetingDocument, MeetingTranscript
 
+# Google Calendar imports (optional - only if credentials are provided)
+try:
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    from google_auth_oauthlib.flow import Flow
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+    GOOGLE_CALENDAR_AVAILABLE = True
+except ImportError:
+    GOOGLE_CALENDAR_AVAILABLE = False
+    Request = None
+
 
 class GranolaMCPServer:
     """Granola MCP Server for meeting intelligence queries."""
     
-    def __init__(self, cache_path: Optional[str] = None, timezone: Optional[str] = None):
+    def __init__(self, cache_path: Optional[str] = None, timezone: Optional[str] = None,
+                 google_client_id: Optional[str] = None,
+                 google_client_secret: Optional[str] = None,
+                 google_refresh_token: Optional[str] = None):
         """Initialize the Granola MCP server."""
         if cache_path is None:
             cache_path = os.path.expanduser("~/Library/Application Support/Granola/cache-v3.json")
@@ -38,6 +54,17 @@ class GranolaMCPServer:
         else:
             # Auto-detect local timezone
             self.local_timezone = self._detect_local_timezone()
+        
+        # Google Calendar credentials (from environment or parameters)
+        self.google_client_id = google_client_id or os.getenv("GOOGLE_CLIENT_ID")
+        self.google_client_secret = google_client_secret or os.getenv("GOOGLE_CLIENT_SECRET")
+        self.google_refresh_token = google_refresh_token or os.getenv("GOOGLE_REFRESH_TOKEN")
+        self.google_calendar_enabled = (
+            GOOGLE_CALENDAR_AVAILABLE and 
+            self.google_client_id and 
+            self.google_client_secret and 
+            self.google_refresh_token
+        )
             
         self._setup_handlers()
     
@@ -84,6 +111,83 @@ class GranolaMCPServer:
         
         # Ultimate fallback to Eastern Time (common for US business)
         return zoneinfo.ZoneInfo('America/New_York')
+    
+    def _get_google_credentials(self) -> Optional[Credentials]:
+        """Get Google Calendar credentials."""
+        if not self.google_calendar_enabled:
+            return None
+        
+        try:
+            creds = Credentials(
+                token=None,
+                refresh_token=self.google_refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=self.google_client_id,
+                client_secret=self.google_client_secret
+            )
+            # Refresh the token
+            creds.refresh(Request())
+            return creds
+        except Exception as e:
+            print(f"Error getting Google credentials: {e}")
+            return None
+    
+    async def _fetch_calendar_events(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+        """Fetch calendar events from Google Calendar."""
+        if not self.google_calendar_enabled:
+            return []
+        
+        try:
+            creds = self._get_google_credentials()
+            if not creds:
+                return []
+            
+            service = build('calendar', 'v3', credentials=creds)
+            
+            # Convert to RFC3339 format
+            time_min = start_date.isoformat() + 'Z' if start_date.tzinfo is None else start_date.isoformat()
+            time_max = end_date.isoformat() + 'Z' if end_date.tzinfo is None else end_date.isoformat()
+            
+            events_result = service.events().list(
+                calendarId='primary',
+                timeMin=time_min,
+                timeMax=time_max,
+                maxResults=50,
+                singleEvents=True,
+                orderBy='startTime'
+            ).execute()
+            
+            events = events_result.get('items', [])
+            
+            # Convert to our format
+            calendar_meetings = []
+            for event in events:
+                start = event['start'].get('dateTime', event['start'].get('date'))
+                # Parse the datetime
+                if 'T' in start:
+                    event_date = datetime.fromisoformat(start.replace('Z', '+00:00'))
+                else:
+                    event_date = datetime.fromisoformat(start)
+                
+                # Extract attendees
+                attendees = []
+                if 'attendees' in event:
+                    attendees = [att.get('email', '') for att in event.get('attendees', [])]
+                
+                calendar_meetings.append({
+                    'title': event.get('summary', 'No Title'),
+                    'date': event_date,
+                    'participants': attendees,
+                    'description': event.get('description', ''),
+                    'location': event.get('location', ''),
+                    'id': event.get('id', ''),
+                    'source': 'google_calendar'
+                })
+            
+            return calendar_meetings
+        except Exception as e:
+            print(f"Error fetching calendar events: {e}")
+            return []
     
     def _convert_to_local_time(self, utc_datetime: datetime) -> datetime:
         """Convert UTC datetime to local timezone."""
@@ -412,6 +516,82 @@ class GranolaMCPServer:
             print(f"Error extracting structured notes: {e}")
             return ""
     
+    def _parse_date_query(self, query: str) -> Optional[Tuple[datetime, datetime]]:
+        """Parse date-related queries and return date range (start, end)."""
+        query_lower = query.lower().strip()
+        now = datetime.now(self.local_timezone)
+        
+        # Handle "this week" - Monday to Sunday of current week
+        if "this week" in query_lower:
+            days_since_monday = now.weekday()
+            start = (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end = (start + timedelta(days=6)).replace(hour=23, minute=59, second=59, microsecond=999999)
+            return (start, end)
+        
+        # Handle "last week" - Monday to Sunday of previous week
+        if "last week" in query_lower:
+            days_since_monday = now.weekday()
+            last_monday = (now - timedelta(days=days_since_monday + 7)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end = (last_monday + timedelta(days=6)).replace(hour=23, minute=59, second=59, microsecond=999999)
+            return (last_monday, end)
+        
+        # Handle "today"
+        if query_lower == "today" or "today" in query_lower:
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return (start, end)
+        
+        # Handle "yesterday"
+        if "yesterday" in query_lower:
+            yesterday = now - timedelta(days=1)
+            start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return (start, end)
+        
+        # Handle month queries like "November 2025", "Nov 2025", "November"
+        month_pattern = r'(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s*(\d{4})?'
+        month_match = re.search(month_pattern, query_lower)
+        if month_match:
+            month_name = month_match.group(1)
+            year_str = month_match.group(2)
+            
+            month_map = {
+                'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
+                'april': 4, 'apr': 4, 'may': 5, 'june': 6, 'jun': 6,
+                'july': 7, 'jul': 7, 'august': 8, 'aug': 8,
+                'september': 9, 'sep': 9, 'october': 10, 'oct': 10,
+                'november': 11, 'nov': 11, 'december': 12, 'dec': 12
+            }
+            
+            month_num = month_map.get(month_name)
+            if month_num:
+                year = int(year_str) if year_str else now.year
+                # Use UTC for month boundaries to avoid DST issues, then convert to local
+                start_utc = datetime(year, month_num, 1, tzinfo=zoneinfo.ZoneInfo('UTC'))
+                start = start_utc.astimezone(self.local_timezone).replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                # Get last day of month
+                if month_num == 12:
+                    end_utc = datetime(year + 1, 1, 1, tzinfo=zoneinfo.ZoneInfo('UTC')) - timedelta(microseconds=1)
+                else:
+                    end_utc = datetime(year, month_num + 1, 1, tzinfo=zoneinfo.ZoneInfo('UTC')) - timedelta(microseconds=1)
+                end = end_utc.astimezone(self.local_timezone).replace(hour=23, minute=59, second=59, microsecond=999999)
+                return (start, end)
+        
+        # Handle year queries like "2025"
+        year_pattern = r'\b(20\d{2})\b'
+        year_match = re.search(year_pattern, query_lower)
+        if year_match:
+            year = int(year_match.group(1))
+            # Use UTC for year boundaries to avoid DST issues, then convert to local
+            start_utc = datetime(year, 1, 1, tzinfo=zoneinfo.ZoneInfo('UTC'))
+            start = start_utc.astimezone(self.local_timezone).replace(hour=0, minute=0, second=0, microsecond=0)
+            end_utc = datetime(year, 12, 31, 23, 59, 59, 999999, tzinfo=zoneinfo.ZoneInfo('UTC'))
+            end = end_utc.astimezone(self.local_timezone).replace(hour=23, minute=59, second=59, microsecond=999999)
+            return (start, end)
+        
+        return None
+    
     async def _search_meetings(self, query: str, limit: int = 10) -> List[TextContent]:
         """Search meetings by query."""
         if not self.cache_data:
@@ -420,30 +600,194 @@ class GranolaMCPServer:
         query_lower = query.lower()
         results = []
         
+        # Try to parse date query first
+        date_range = self._parse_date_query(query)
+        
         for meeting_id, meeting in self.cache_data.meetings.items():
             score = 0
             
-            # Search in title
-            if query_lower in meeting.title.lower():
-                score += 2
-            
-            # Search in participants
-            for participant in meeting.participants:
-                if query_lower in participant.lower():
-                    score += 1
-            
-            # Search in transcript content if available
-            if meeting_id in self.cache_data.transcripts:
-                transcript = self.cache_data.transcripts[meeting_id]
-                if query_lower in transcript.content.lower():
-                    score += 1
+            # If date range is specified, check if meeting falls within range
+            if date_range:
+                meeting_local_date = self._convert_to_local_time(meeting.date)
+                if date_range[0] <= meeting_local_date <= date_range[1]:
+                    score += 10  # High score for date matches
+                else:
+                    continue  # Skip meetings outside date range
+            else:
+                # Text-based search
+                # Search in title
+                if query_lower in meeting.title.lower():
+                    score += 2
+                
+                # Search in participants
+                for participant in meeting.participants:
+                    if query_lower in participant.lower():
+                        score += 1
+                
+                # Search in transcript content if available
+                if meeting_id in self.cache_data.transcripts:
+                    transcript = self.cache_data.transcripts[meeting_id]
+                    if query_lower in transcript.content.lower():
+                        score += 1
             
             if score > 0:
                 results.append((score, meeting))
         
-        # Sort by relevance and limit results
-        results.sort(key=lambda x: x[0], reverse=True)
+        # Sort by date (most recent first) if date query, otherwise by relevance
+        if date_range:
+            results.sort(key=lambda x: x[1].date, reverse=True)
+        else:
+            results.sort(key=lambda x: x[0], reverse=True)
+        
         results = results[:limit]
+        
+        # Handle "this week" queries specially to show both past and upcoming
+        if date_range and "this week" in query_lower:
+            now = datetime.now(self.local_timezone)
+            week_start = date_range[0].strftime("%B %d")
+            week_end = date_range[1].strftime("%B %d")
+            past_this_week = []
+            upcoming_this_week = []
+            
+            # Fetch calendar events for this week
+            calendar_events = []
+            if self.google_calendar_enabled:
+                try:
+                    calendar_events = await self._fetch_calendar_events(date_range[0], date_range[1])
+                except Exception as e:
+                    print(f"Error fetching calendar events: {e}")
+            
+            # Separate past and upcoming meetings within this week
+            for score, meeting in results:
+                meeting_local_date = self._convert_to_local_time(meeting.date)
+                if meeting_local_date < now:
+                    past_this_week.append((score, meeting))
+                else:
+                    upcoming_this_week.append((score, meeting))
+            
+            # Add calendar events to upcoming/past lists
+            for event in calendar_events:
+                event_local_date = self._convert_to_local_time(event['date'])
+                if date_range[0] <= event_local_date <= date_range[1]:
+                    # Create a MeetingMetadata-like object for calendar events
+                    from types import SimpleNamespace
+                    calendar_meeting = SimpleNamespace(
+                        title=event['title'],
+                        id=f"calendar_{event['id']}",
+                        date=event['date'],
+                        participants=event['participants'],
+                        source='google_calendar'
+                    )
+                    if event_local_date < now:
+                        past_this_week.append((10, calendar_meeting))
+                    else:
+                        upcoming_this_week.append((10, calendar_meeting))
+            
+            output_lines = []
+            
+            if upcoming_this_week or past_this_week:
+                
+                if upcoming_this_week:
+                    output_lines.append(f"## Upcoming This Week ({week_start} - {week_end})\n")
+                    upcoming_this_week.sort(key=lambda x: x[1].date)  # Sort ascending (earliest first)
+                    for score, meeting in upcoming_this_week:
+                        meeting_local_date = self._convert_to_local_time(meeting.date)
+                        source_label = "📅 Calendar" if hasattr(meeting, 'source') and meeting.source == 'google_calendar' else "🎙️ Granola"
+                        output_lines.append(f"• **{meeting.title}** {source_label}")
+                        if not hasattr(meeting, 'source') or meeting.source != 'google_calendar':
+                            output_lines.append(f"  ID: {meeting.id}")
+                        output_lines.append(f"  Date: {self._format_local_time(meeting.date)}")
+                        if meeting.participants:
+                            output_lines.append(f"  Participants: {', '.join(meeting.participants)}")
+                        output_lines.append("")
+                
+                if past_this_week:
+                    if upcoming_this_week:
+                        output_lines.append("\n## Past This Week\n")
+                    else:
+                        output_lines.append(f"## Meetings This Week ({week_start} - {week_end})\n")
+                    past_this_week.sort(key=lambda x: x[1].date, reverse=True)  # Sort descending (most recent first)
+                    for score, meeting in past_this_week:
+                        source_label = "📅 Calendar" if hasattr(meeting, 'source') and meeting.source == 'google_calendar' else "🎙️ Granola"
+                        output_lines.append(f"• **{meeting.title}** {source_label}")
+                        if not hasattr(meeting, 'source') or meeting.source != 'google_calendar':
+                            output_lines.append(f"  ID: {meeting.id}")
+                        output_lines.append(f"  Date: {self._format_local_time(meeting.date)}")
+                        if meeting.participants:
+                            output_lines.append(f"  Participants: {', '.join(meeting.participants)}")
+                        output_lines.append("")
+                
+                return [TextContent(type="text", text="\n".join(output_lines))]
+            
+            # If no meetings this week, show upcoming scheduled meetings and recent past
+            else:
+                # Look for upcoming meetings (future dates) - though Granola cache typically only has past meetings
+                upcoming_future = []
+                for meeting_id, meeting in self.cache_data.meetings.items():
+                    meeting_local_date = self._convert_to_local_time(meeting.date)
+                    if meeting_local_date > now:
+                        upcoming_future.append((0, meeting))
+                
+                # Also get recent past meetings
+                two_weeks_ago = now - timedelta(days=14)
+                recent_past = []
+                for meeting_id, meeting in self.cache_data.meetings.items():
+                    meeting_local_date = self._convert_to_local_time(meeting.date)
+                    if two_weeks_ago <= meeting_local_date < now:
+                        recent_past.append((0, meeting))
+                
+                # Try to fetch calendar events if no Granola meetings found
+                calendar_events = []
+                if self.google_calendar_enabled:
+                    try:
+                        calendar_events = await self._fetch_calendar_events(date_range[0], date_range[1])
+                        # Filter to upcoming events
+                        upcoming_calendar = [e for e in calendar_events if self._convert_to_local_time(e['date']) > now]
+                        if upcoming_calendar:
+                            output_lines = [f"## Upcoming This Week ({week_start} - {week_end})\n\n"]
+                            upcoming_calendar.sort(key=lambda x: x['date'])
+                            for event in upcoming_calendar[:limit]:
+                                event_local_date = self._convert_to_local_time(event['date'])
+                                output_lines.append(f"• **{event['title']}** 📅 Calendar")
+                                output_lines.append(f"  Date: {self._format_local_time(event['date'])}")
+                                if event.get('location'):
+                                    output_lines.append(f"  Location: {event['location']}")
+                                if event['participants']:
+                                    output_lines.append(f"  Participants: {', '.join(event['participants'])}")
+                                output_lines.append("")
+                            return [TextContent(type="text", text="\n".join(output_lines))]
+                    except Exception as e:
+                        print(f"Error fetching calendar events: {e}")
+                
+                output_lines = [f"No recorded meetings found for this week ({week_start} - {week_end}).\n\n"]
+                if not self.google_calendar_enabled:
+                    output_lines.append("**Note:** Granola's cache only contains meetings that have already been recorded. ")
+                    output_lines.append("To see your upcoming scheduled meetings, please configure Google Calendar integration.\n\n")
+                
+                if upcoming_future:
+                    upcoming_future.sort(key=lambda x: x[1].date)  # Sort ascending
+                    upcoming_future = upcoming_future[:5]  # Limit to 5 upcoming
+                    output_lines.append("## Upcoming Scheduled Meetings (from Granola cache)\n")
+                    for score, meeting in upcoming_future:
+                        output_lines.append(f"• **{meeting.title}** ({meeting.id})")
+                        output_lines.append(f"  Date: {self._format_local_time(meeting.date)}")
+                        if meeting.participants:
+                            output_lines.append(f"  Participants: {', '.join(meeting.participants)}")
+                        output_lines.append("")
+                    output_lines.append("")
+                
+                if recent_past:
+                    recent_past.sort(key=lambda x: x[1].date, reverse=True)
+                    recent_past = recent_past[:5]  # Limit to 5 recent
+                    output_lines.append("## Recent Past Meetings\n")
+                    for score, meeting in recent_past:
+                        output_lines.append(f"• **{meeting.title}** ({meeting.id})")
+                        output_lines.append(f"  Date: {self._format_local_time(meeting.date)}")
+                        if meeting.participants:
+                            output_lines.append(f"  Participants: {', '.join(meeting.participants)}")
+                        output_lines.append("")
+                
+                return [TextContent(type="text", text="\n".join(output_lines))]
         
         if not results:
             return [TextContent(type="text", text=f"No meetings found matching '{query}'")]
@@ -678,5 +1022,14 @@ class GranolaMCPServer:
 
 def main():
     """Main entry point for the server."""
-    server = GranolaMCPServer()
+    # Get Google credentials from environment variables
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+    google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+    google_refresh_token = os.getenv("GOOGLE_REFRESH_TOKEN")
+    
+    server = GranolaMCPServer(
+        google_client_id=google_client_id,
+        google_client_secret=google_client_secret,
+        google_refresh_token=google_refresh_token
+    )
     server.run()
