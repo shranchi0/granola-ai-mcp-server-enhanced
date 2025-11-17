@@ -14,6 +14,7 @@ class MeetingMetadata(BaseModel):
     participants: List[str] = []
     meeting_type: Optional[str] = None
     platform: Optional[str] = None
+    categories: List[str] = []  # Pre-classified industry/category tags
 
 
 class MeetingDocument(BaseModel):

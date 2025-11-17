@@ -142,6 +142,11 @@ class GranolaMCPServer:
         self._gpt_category_cache: Dict[str, List[str]] = {}
         self._turbopuffer_sync_in_progress = False
         
+        # Classification cache file path
+        self._classification_cache_path = Path(cache_path).parent / "meeting-classifications.json"
+        self._classification_cache: Dict[str, List[str]] = {}
+        self._load_classification_cache()
+        
         self._setup_handlers()
     
     def _detect_local_timezone(self):
@@ -739,6 +744,17 @@ class GranolaMCPServer:
                     traceback.print_exc(file=sys.stderr)
         
         cache_data.last_updated = datetime.now()
+        
+        # Load classifications into meeting metadata
+        for meeting_id, meeting in cache_data.meetings.items():
+            if meeting_id in self._classification_cache:
+                meeting.categories = self._classification_cache[meeting_id]
+        
+        # Start background classification for meetings without categories
+        if self.openai_client:
+            import asyncio
+            asyncio.create_task(self._classify_meetings_background(cache_data))
+        
         return cache_data
     
     def _extract_structured_notes(self, notes_data: Dict[str, Any]) -> str:
@@ -1592,14 +1608,118 @@ class GranolaMCPServer:
                 text=f"Error performing similarity search: {str(e)}"
             )]
     
-    async def _search_companies_by_category(self, category: str, date_range: Optional[Dict] = None, limit: int = 20) -> List[TextContent]:
-        """Intelligently search for companies by category using GPT analysis."""
+    def _load_classification_cache(self) -> None:
+        """Load pre-classified meeting categories from disk."""
+        try:
+            if self._classification_cache_path.exists():
+                with open(self._classification_cache_path, 'r') as f:
+                    self._classification_cache = json.load(f)
+                sys.stderr.write(f"Loaded {len(self._classification_cache)} meeting classifications\n")
+        except Exception as e:
+            sys.stderr.write(f"Error loading classification cache: {e}\n")
+            self._classification_cache = {}
+    
+    def _save_classification_cache(self) -> None:
+        """Save meeting classifications to disk."""
+        try:
+            with open(self._classification_cache_path, 'w') as f:
+                json.dump(self._classification_cache, f, indent=2)
+        except Exception as e:
+            sys.stderr.write(f"Error saving classification cache: {e}\n")
+    
+    async def _classify_meetings_background(self, cache_data: CacheData) -> None:
+        """Classify meetings in the background using GPT-4o-mini (cheaper/faster)."""
         if not self.openai_client:
-            return [TextContent(
-                type="text",
-                text="Intelligent search requires OpenAI API. Please set OPENAI_API_KEY environment variable."
-            )]
+            return
         
+        # Find meetings without classifications
+        unclassified = []
+        for meeting_id, meeting in cache_data.meetings.items():
+            if meeting_id not in self._classification_cache or not self._classification_cache[meeting_id]:
+                # Check if we have transcript or document content
+                has_content = False
+                content = ""
+                
+                if meeting_id in cache_data.transcripts:
+                    transcript = cache_data.transcripts[meeting_id]
+                    if transcript.content and len(transcript.content) > 100:
+                        content = transcript.content[:3000]  # Use first 3k chars for classification
+                        has_content = True
+                
+                if not has_content and meeting_id in cache_data.documents:
+                    doc = cache_data.documents[meeting_id]
+                    if doc.content and len(doc.content) > 100:
+                        content = doc.content[:3000]
+                        has_content = True
+                
+                if has_content:
+                    unclassified.append((meeting_id, meeting, content))
+        
+        if not unclassified:
+            return
+        
+        sys.stderr.write(f"Classifying {len(unclassified)} meetings in background...\n")
+        
+        # Classify in batches of 10
+        batch_size = 10
+        for i in range(0, len(unclassified), batch_size):
+            batch = unclassified[i:i + batch_size]
+            
+            try:
+                # Build classification prompt
+                meeting_contexts = []
+                for meeting_id, meeting, content in batch:
+                    meeting_contexts.append({
+                        "id": meeting_id,
+                        "title": meeting.title,
+                        "content": content[:2000]  # Limit for batch processing
+                    })
+                
+                prompt = f"""Classify each meeting by industry/category. Return JSON with meeting_id -> categories array.
+
+Common categories: devtools, fintech, healthcare, biotech, AI/ML, SaaS, enterprise software, consumer, e-commerce, edtech, hrtech, cybersecurity, infrastructure, developer tools, API platforms, data tools, analytics, automation, workflow tools, etc.
+
+Be inclusive - assign multiple relevant categories if applicable.
+
+Meetings:
+{json.dumps(meeting_contexts, indent=2)}
+
+Return JSON: {{"meeting_id": ["category1", "category2"], ...}}"""
+
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o-mini",  # Use cheaper model for classification
+                    messages=[
+                        {"role": "system", "content": "You classify business meetings by industry/category. Return valid JSON mapping meeting_id to array of categories."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"}
+                )
+                
+                result = json.loads(response.choices[0].message.content)
+                
+                # Save classifications
+                for meeting_id, categories in result.items():
+                    if isinstance(categories, list):
+                        self._classification_cache[meeting_id] = categories
+                        # Update in-memory cache
+                        if cache_data and meeting_id in cache_data.meetings:
+                            cache_data.meetings[meeting_id].categories = categories
+                
+                # Save to disk periodically
+                if (i + batch_size) % 50 == 0:
+                    self._save_classification_cache()
+                
+            except Exception as e:
+                sys.stderr.write(f"Error classifying batch: {e}\n")
+                import traceback
+                traceback.print_exc(file=sys.stderr)
+        
+        # Final save
+        self._save_classification_cache()
+        sys.stderr.write(f"Completed background classification\n")
+    
+    async def _search_companies_by_category(self, category: str, date_range: Optional[Dict] = None, limit: int = 20) -> List[TextContent]:
+        """Intelligently search for companies by category using pre-classified tags or GPT analysis."""
         if not self.cache_data or not self.cache_data.meetings:
             return [TextContent(type="text", text="No meetings found in cache")]
         
@@ -1612,7 +1732,56 @@ class GranolaMCPServer:
                 "end_date": now.strftime("%Y-%m-%d")
             }
         
-        # Fast path: Check cache FIRST before any processing
+        # FAST PATH: Use pre-classified tags if available
+        category_lower = category.lower()
+        matching_ids = []
+        
+        # Parse date range
+        start_date_str = date_range.get("start_date", "1900-01-01")
+        end_date_str = date_range.get("end_date", "2100-01-01")
+        start_date = datetime.fromisoformat(start_date_str).replace(tzinfo=self.local_timezone)
+        end_date = datetime.fromisoformat(end_date_str).replace(hour=23, minute=59, second=59, tzinfo=self.local_timezone)
+        
+        # Search by pre-classified tags
+        for meeting_id, meeting in self.cache_data.meetings.items():
+            # Check date range
+            meeting_date = meeting.date
+            if meeting_date.tzinfo is None:
+                meeting_date = meeting_date.replace(tzinfo=self.local_timezone)
+            
+            if not (start_date <= meeting_date <= end_date):
+                continue
+            
+            # Check if meeting has matching category tags
+            meeting_categories = [cat.lower() for cat in meeting.categories]
+            if category_lower in meeting_categories or any(category_lower in cat for cat in meeting_categories):
+                matching_ids.append(meeting_id)
+        
+        # If we found matches via tags, return immediately (fast path)
+        if matching_ids:
+            results = []
+            for meeting_id in matching_ids[:limit]:
+                if meeting_id in self.cache_data.meetings:
+                    meeting = self.cache_data.meetings[meeting_id]
+                    results.append((meeting_id, meeting))
+            
+            if results:
+                output = [f"# Companies Matching: {category}\n\n"]
+                output.append(f"Found {len(results)} company/companies:\n\n")
+                for meeting_id, meeting in results:
+                    output.append(f"## {meeting.title}")
+                    output.append(f"**Date:** {self._format_local_time(meeting.date)}")
+                    output.append(f"**ID:** {meeting_id}\n")
+                return [TextContent(type="text", text="\n".join(output))]
+        
+        # FALLBACK: Use GPT analysis if no tags match (for new/unclassified meetings)
+        if not self.openai_client:
+            return [TextContent(
+                type="text",
+                text="No companies found matching this category. Intelligent search requires OpenAI API. Please set OPENAI_API_KEY environment variable."
+            )]
+        
+        # Check GPT cache
         cache_key = f"{category}_{date_range.get('start_date', '')}_{date_range.get('end_date', '')}"
         if cache_key in self._gpt_category_cache:
             matching_ids = self._gpt_category_cache[cache_key]
