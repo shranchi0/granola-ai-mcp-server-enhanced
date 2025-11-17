@@ -430,11 +430,10 @@ class GranolaMCPServer:
                                 "description": "Maximum number of results to return",
                                 "default": 30
                             }
-                                "type": "object",
-                                "properties": {
-                                    "start_date": {"type": "string", "format": "date"},
-                                    "end_date": {"type": "string", "format": "date"}
-                                },
+                        },
+                        "required": ["category"]
+                    }
+                ),
                                 "description": "Optional date range to filter meetings (e.g., last 2 weeks, last month)"
                             },
                             "limit": {
