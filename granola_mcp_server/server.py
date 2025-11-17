@@ -1586,17 +1586,17 @@ class GranolaMCPServer:
                     "participants": meeting.participants
                 }
                 
-                # Add document content if available
+                # Add document content if available (use more content for better analysis)
                 if meeting_id in self.cache_data.documents:
                     doc = self.cache_data.documents[meeting_id]
                     if doc.content:
-                        context["notes"] = doc.content[:2000]  # Limit to avoid token limits
+                        context["notes"] = doc.content[:10000]  # Increased limit for comprehensive analysis
                 
-                # Add transcript snippet if available
+                # Add transcript snippet if available (use more content for better analysis)
                 if meeting_id in self.cache_data.transcripts:
                     transcript = self.cache_data.transcripts[meeting_id]
                     if transcript.content:
-                        context["transcript"] = transcript.content[:2000]
+                        context["transcript"] = transcript.content[:10000]  # Increased limit for comprehensive analysis
                 
                 meeting_contexts.append(context)
             
