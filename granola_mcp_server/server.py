@@ -409,15 +409,27 @@ class GranolaMCPServer:
                 ),
                 Tool(
                     name="search_companies_by_category",
-                    description="Intelligently search for companies by category using AI analysis. This uses GPT to understand what type of companies you're looking for and analyzes meeting content to find matches. Examples: 'devtools companies', 'AI companies', 'HR tech companies', 'fintech startups'. Much more intelligent than keyword search.",
+                    description="Intelligently search for companies by category using AI analysis. This uses GPT to understand what type of companies you're looking for and analyzes meeting content to find matches. Examples: 'devtools companies', 'AI companies', 'HR tech companies', 'fintech startups'. Much more intelligent than keyword search. By default searches meetings from the last 30 days (matching Granola's native behavior).",
                     inputSchema={
                         "type": "object",
                         "properties": {
                             "category": {
                                 "type": "string",
-                                "description": "Category or type of companies to find (e.g., 'devtools', 'AI companies', 'HR tech', 'fintech', 'SaaS companies')"
+                                "description": "Category or type of companies to find (e.g., 'devtools', 'AI companies', 'HR tech', 'fintech', 'SaaS companies'). Be specific but the AI will be inclusive in matching."
                             },
                             "date_range": {
+                                "type": "object",
+                                "properties": {
+                                    "start_date": {"type": "string", "format": "date"},
+                                    "end_date": {"type": "string", "format": "date"}
+                                },
+                                "description": "Optional date range filter (YYYY-MM-DD format). If not provided, defaults to last 30 days to match Granola's native behavior."
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of results to return",
+                                "default": 30
+                            }
                                 "type": "object",
                                 "properties": {
                                     "start_date": {"type": "string", "format": "date"},
