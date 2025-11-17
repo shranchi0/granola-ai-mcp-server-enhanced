@@ -1540,9 +1540,20 @@ class GranolaMCPServer:
             meetings_to_analyze = []
             for meeting_id, meeting in self.cache_data.meetings.items():
                 if date_range:
-                    start_date = datetime.fromisoformat(date_range.get("start_date", "1900-01-01"))
-                    end_date = datetime.fromisoformat(date_range.get("end_date", "2100-01-01"))
-                    if not (start_date <= meeting.date <= end_date):
+                    # Parse dates and ensure they're timezone-aware
+                    start_date_str = date_range.get("start_date", "1900-01-01")
+                    end_date_str = date_range.get("end_date", "2100-01-01")
+                    
+                    # Parse dates (they come as YYYY-MM-DD strings)
+                    start_date = datetime.fromisoformat(start_date_str).replace(tzinfo=self.local_timezone)
+                    end_date = datetime.fromisoformat(end_date_str).replace(hour=23, minute=59, second=59, tzinfo=self.local_timezone)
+                    
+                    # Ensure meeting date is timezone-aware
+                    meeting_date = meeting.date
+                    if meeting_date.tzinfo is None:
+                        meeting_date = meeting_date.replace(tzinfo=self.local_timezone)
+                    
+                    if not (start_date <= meeting_date <= end_date):
                         continue
                 meetings_to_analyze.append((meeting_id, meeting))
             
