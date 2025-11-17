@@ -816,10 +816,11 @@ class GranolaMCPServer:
             end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
             return (start, end)
         
-        # Handle "Friday last week", "Monday last week", etc.
+        # Handle "Friday last week", "Monday last week", "last Friday", etc.
+        # Check for day name + "last week" or "last" + day name
         day_pattern = r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)'
         day_match = re.search(day_pattern, query_lower)
-        if day_match and "last week" in query_lower:
+        if day_match and ("last week" in query_lower or ("last" in query_lower and day_match)):
             days_since_monday = now.weekday()
             last_monday = (now - timedelta(days=days_since_monday + 7)).replace(hour=0, minute=0, second=0, microsecond=0)
             
