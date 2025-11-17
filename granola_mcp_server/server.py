@@ -1631,10 +1631,12 @@ class GranolaMCPServer:
                     text=f"No meetings found in the specified date range"
                 )]
             
-            # Build context for GPT - include meeting titles, participants, and available content
-            # Don't limit the number of meetings analyzed - let GPT see all of them
+            # Build context for GPT - optimize: limit to 50 most recent meetings for faster processing
             meeting_contexts = []
-            for meeting_id, meeting in meetings_to_analyze:  # Analyze all meetings in date range
+            # Sort by date (most recent first) and limit to 50 meetings for GPT analysis
+            sorted_meetings = sorted(meetings_to_analyze, key=lambda x: x[1].date, reverse=True)[:50]
+            
+            for meeting_id, meeting in sorted_meetings:
                 context = {
                     "id": meeting_id,
                     "title": meeting.title,
@@ -1642,17 +1644,17 @@ class GranolaMCPServer:
                     "participants": meeting.participants
                 }
                 
-                # Add document content if available (use more content for better analysis)
+                # Add document content if available (optimized: reasonable limit for speed)
                 if meeting_id in self.cache_data.documents:
                     doc = self.cache_data.documents[meeting_id]
                     if doc.content:
-                        context["notes"] = doc.content[:10000]  # Increased limit for comprehensive analysis
+                        context["notes"] = doc.content[:3000]  # Reduced for faster processing
                 
-                # Add transcript snippet if available (use more content for better analysis)
+                # Add transcript snippet if available (optimized: reasonable limit for speed)
                 if meeting_id in self.cache_data.transcripts:
                     transcript = self.cache_data.transcripts[meeting_id]
                     if transcript.content:
-                        context["transcript"] = transcript.content[:10000]  # Increased limit for comprehensive analysis
+                        context["transcript"] = transcript.content[:3000]  # Reduced for faster processing
                 
                 meeting_contexts.append(context)
             
