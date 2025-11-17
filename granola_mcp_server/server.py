@@ -1663,10 +1663,10 @@ class GranolaMCPServer:
                     text=f"No meetings found in the specified date range"
                 )]
             
-            # Build context for GPT - optimize for speed: limit meetings and context size
+            # Build context for GPT - include all meetings in date range (up to 80 for balance)
             meeting_contexts = []
-            # Sort by date (most recent first) and limit to 60 meetings for faster GPT processing
-            sorted_meetings = sorted(meetings_to_analyze, key=lambda x: x[1].date, reverse=True)[:60]
+            # Sort by date (most recent first) and include up to 80 meetings for comprehensive analysis
+            sorted_meetings = sorted(meetings_to_analyze, key=lambda x: x[1].date, reverse=True)[:80]
             
             for meeting_id, meeting in sorted_meetings:
                 context = {
@@ -1706,41 +1706,43 @@ class GranolaMCPServer:
 
 Category to find: {category}
 
-For each meeting, determine if the company discussed matches this category. Consider:
-- The company's product/service
-- Their target market
-- Their business model
-- Industry/vertical
-- Technology stack (if relevant)
-- Developer tools, infrastructure, platforms, SDKs, APIs
-- Any tools or platforms that developers or engineers would use
+Analyze EVERY meeting below. For each meeting, determine if the company discussed matches this category.
 
-IMPORTANT: Be INCLUSIVE and broad in your interpretation. Include:
-- Pure developer tools (e.g., debugging platforms, CI/CD, testing tools)
-- Developer infrastructure (e.g., control planes, governance platforms)
-- Developer-adjacent platforms (e.g., workflow orchestrators, AI development tools)
-- Platforms with developer SDKs or APIs
-- Any company that builds tools primarily for developers/engineers
+Be VERY INCLUSIVE and broad. Include companies if they match ANY of these criteria:
+- Build tools for developers, engineers, or technical teams
+- Provide developer infrastructure, platforms, SDKs, or APIs
+- Create debugging, testing, CI/CD, or deployment tools
+- Build workflow orchestrators, automation tools, or control planes
+- Provide governance, security, or compliance tools for developers
+- Create AI/ML development tools or platforms
+- Build application platforms, spreadsheets, or tools with coding capabilities
+- Any company whose primary customers are developers or engineers
+- Companies that mention "developers", "engineers", "SDK", "API", "platform", "tools", "infrastructure" in their description
 
-CRITICAL: Return ALL companies that match this category, not just one. Include every meeting where the company matches the category description. Be thorough and comprehensive. If a company could reasonably be considered a devtools company (or the requested category), include it.
+CRITICAL INSTRUCTIONS:
+1. Return ALL companies that match, not just one
+2. If you're unsure whether a company matches, INCLUDE IT (be generous)
+3. Look for ANY mention of developer tools, platforms, SDKs, APIs, or developer-focused products
+4. Include both pure devtools AND developer-adjacent companies
+5. Review ALL {len(meeting_contexts)} meetings - don't skip any
 
 Meeting data:
 {json.dumps(meeting_contexts, indent=2, default=str)}
 
-Return a JSON object with a "meeting_ids" array containing ALL matching meeting IDs, ordered by relevance (most relevant first).
-Example: {{"meeting_ids": ["id1", "id2", "id3", "id4", "id5", "id6", "id7"]}}
+Return a JSON object with a "meeting_ids" array containing ALL matching meeting IDs.
+Example: {{"meeting_ids": ["id1", "id2", "id3", "id4", "id5", "id6", "id7", "id8"]}}
 
-If multiple companies match, include them all. Be generous in your categorization."""
+IMPORTANT: Include ALL meetings where the company could reasonably be considered a match. Be very generous."""
 
-                # Use GPT-5 with optimized settings for faster response
+                # Use GPT-5 with optimized settings
                 response = self.openai_client.chat.completions.create(
                     model="gpt-5",  # Using GPT-5 for best intelligence and accuracy
                     messages=[
-                        {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array. Return ALL companies that match the category, not just one. Be fast and efficient."},
+                        {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array. Return ALL companies that match the category, not just one. Be thorough and inclusive - include all matches, not just the most obvious ones."},
                         {"role": "user", "content": prompt}
                     ],
                     response_format={"type": "json_object"},
-                    max_tokens=500  # Limit response size for faster processing
+                    max_tokens=1000  # Increased to allow more meeting IDs
                     # Note: GPT-5 doesn't support custom temperature, uses default
                 )
                 
