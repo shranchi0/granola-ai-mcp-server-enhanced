@@ -449,33 +449,57 @@ class GranolaMCPServer:
             for doc_id, doc_data in raw_data["documents"].items():
                 try:
                     # Extract content from various Granola fields
+                    # Check ALL fields (not elif) to combine content from multiple sources
                     content_parts = []
                     
-                    # Try notes_plain first (cleanest format)
-                    if doc_data.get("notes_plain"):
-                        content_parts.append(doc_data["notes_plain"])
+                    # Try notes_plain (cleanest format)
+                    notes_plain = doc_data.get("notes_plain")
+                    if notes_plain and isinstance(notes_plain, str) and notes_plain.strip():
+                        content_parts.append(notes_plain.strip())
                     
-                    # Try notes_markdown as backup
-                    elif doc_data.get("notes_markdown"):
-                        content_parts.append(doc_data["notes_markdown"])
+                    # Try notes_markdown
+                    notes_markdown = doc_data.get("notes_markdown")
+                    if notes_markdown and isinstance(notes_markdown, str) and notes_markdown.strip():
+                        # Only add if we don't already have notes_plain (to avoid duplicates)
+                        if not notes_plain or not notes_plain.strip():
+                            content_parts.append(notes_markdown.strip())
                     
                     # Try to extract from structured notes field
-                    elif doc_data.get("notes") and isinstance(doc_data["notes"], dict):
-                        notes_content = self._extract_structured_notes(doc_data["notes"])
-                        if notes_content:
-                            content_parts.append(notes_content)
+                    notes_dict = doc_data.get("notes")
+                    if notes_dict:
+                        if isinstance(notes_dict, dict):
+                            notes_content = self._extract_structured_notes(notes_dict)
+                            if notes_content and notes_content.strip():
+                                # Only add if we don't already have other notes
+                                if not content_parts:
+                                    content_parts.append(notes_content.strip())
+                        elif isinstance(notes_dict, str) and notes_dict.strip():
+                            # Sometimes notes might be a plain string
+                            if not content_parts:
+                                content_parts.append(notes_dict.strip())
+                    
+                    # Try other possible note field names
+                    for field_name in ["note", "content", "body", "text"]:
+                        field_value = doc_data.get(field_name)
+                        if field_value and isinstance(field_value, str) and field_value.strip():
+                            if not content_parts:
+                                content_parts.append(field_value.strip())
+                                break
                     
                     # Add overview if available
-                    if doc_data.get("overview"):
-                        content_parts.append(f"Overview: {doc_data['overview']}")
+                    overview = doc_data.get("overview")
+                    if overview and isinstance(overview, str) and overview.strip():
+                        content_parts.append(f"Overview: {overview.strip()}")
                     
                     # Add summary if available  
-                    if doc_data.get("summary"):
-                        content_parts.append(f"Summary: {doc_data['summary']}")
+                    summary = doc_data.get("summary")
+                    if summary and isinstance(summary, str) and summary.strip():
+                        content_parts.append(f"Summary: {summary.strip()}")
                     
-                    content = "\n\n".join(content_parts)
+                    content = "\n\n".join(content_parts) if content_parts else ""
                     
-                    # Only create document if we have a meeting for it
+                    # Always create document if we have a meeting for it (even if content is empty)
+                    # This ensures the document exists and can be checked/debugged
                     if doc_id in cache_data.meetings:
                         meeting = cache_data.meetings[doc_id]
                         document = MeetingDocument(
@@ -489,8 +513,14 @@ class GranolaMCPServer:
                         )
                         cache_data.documents[doc_id] = document
                         
+                        # Debug: log if we couldn't find content
+                        if not content:
+                            print(f"Warning: No content found for meeting {doc_id} ({meeting.title}). Available fields: {list(doc_data.keys())}")
+                        
                 except Exception as e:
                     print(f"Error extracting document content for {doc_id}: {e}")
+                    import traceback
+                    traceback.print_exc()
         
         cache_data.last_updated = datetime.now()
         return cache_data
