@@ -1162,10 +1162,22 @@ class GranolaMCPServer:
             
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
                 
+                if response.status_code in [200, 201]:
+                    # Success - namespace will be created automatically on first upsert
+                    sys.stderr.write(f"Successfully upserted {len(rows)} meetings to Turbopuffer namespace '{self.turbopuffer_namespace}'\n")
+                else:
+                    error_text = response.text
+                    sys.stderr.write(f"Turbopuffer API error {response.status_code}: {error_text}\n")
+                    response.raise_for_status()
+                
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text if hasattr(e.response, 'text') else str(e)
+            sys.stderr.write(f"Error upserting to Turbopuffer (HTTP {e.response.status_code}): {error_text}\n")
         except Exception as e:
             sys.stderr.write(f"Error upserting to Turbopuffer: {e}\n")
+            import traceback
+            traceback.print_exc(file=sys.stderr)
     
     async def _query_turbopuffer(self, query: str, limit: int = 10, min_similarity: float = 0.3) -> List[Dict[str, Any]]:
         """Query Turbopuffer for similar meetings."""
@@ -1217,10 +1229,16 @@ class GranolaMCPServer:
     
     async def _sync_meetings_to_turbopuffer(self) -> None:
         """Sync all meetings from cache to Turbopuffer."""
-        if not self.turbopuffer_enabled or not self.cache_data:
+        if not self.turbopuffer_enabled:
+            sys.stderr.write("Turbopuffer not enabled, skipping sync\n")
+            return
+        
+        if not self.cache_data:
+            sys.stderr.write("No cache data available, skipping Turbopuffer sync\n")
             return
         
         try:
+            sys.stderr.write(f"Starting sync to Turbopuffer namespace '{self.turbopuffer_namespace}'...\n")
             rows = []
             
             for meeting_id, meeting in self.cache_data.meetings.items():
