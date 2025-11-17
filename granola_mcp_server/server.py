@@ -548,7 +548,7 @@ class GranolaMCPServer:
                         if not notes_plain or not notes_plain.strip():
                             content_parts.append(notes_markdown.strip())
                     
-                    # Try to extract from structured notes field
+                    # Try to extract from structured notes field (check multiple possible structures)
                     notes_dict = doc_data.get("notes")
                     if notes_dict:
                         if isinstance(notes_dict, dict):
@@ -561,14 +561,63 @@ class GranolaMCPServer:
                             # Sometimes notes might be a plain string
                             if not content_parts:
                                 content_parts.append(notes_dict.strip())
+                        elif isinstance(notes_dict, list):
+                            # Notes might be a list of content blocks
+                            for item in notes_dict:
+                                if isinstance(item, str) and item.strip():
+                                    if not content_parts:
+                                        content_parts.append(item.strip())
+                                        break
+                                elif isinstance(item, dict):
+                                    extracted = self._extract_structured_notes(item)
+                                    if extracted and extracted.strip():
+                                        if not content_parts:
+                                            content_parts.append(extracted.strip())
+                                            break
                     
-                    # Try other possible note field names
-                    for field_name in ["note", "content", "body", "text"]:
+                    # Try other possible note field names (more comprehensive list)
+                    for field_name in ["note", "content", "body", "text", "description", "details", "summary_text"]:
                         field_value = doc_data.get(field_name)
-                        if field_value and isinstance(field_value, str) and field_value.strip():
-                            if not content_parts:
-                                content_parts.append(field_value.strip())
-                                break
+                        if field_value:
+                            if isinstance(field_value, str) and field_value.strip():
+                                if not content_parts:
+                                    content_parts.append(field_value.strip())
+                                    break
+                            elif isinstance(field_value, dict):
+                                # Try to extract from nested dict
+                                extracted = self._extract_structured_notes(field_value)
+                                if extracted and extracted.strip():
+                                    if not content_parts:
+                                        content_parts.append(extracted.strip())
+                                        break
+                    
+                    # Check for nested content structures
+                    if not content_parts:
+                        # Try checking if content is nested in a 'content' or 'data' key
+                        for nested_key in ["content", "data", "value"]:
+                            nested_data = doc_data.get(nested_key)
+                            if nested_data:
+                                if isinstance(nested_data, str) and nested_data.strip():
+                                    content_parts.append(nested_data.strip())
+                                    break
+                                elif isinstance(nested_data, dict):
+                                    extracted = self._extract_structured_notes(nested_data)
+                                    if extracted and extracted.strip():
+                                        content_parts.append(extracted.strip())
+                                        break
+                                elif isinstance(nested_data, list):
+                                    # Try to extract text from list items
+                                    text_items = []
+                                    for item in nested_data:
+                                        if isinstance(item, str):
+                                            text_items.append(item)
+                                        elif isinstance(item, dict):
+                                            extracted = self._extract_structured_notes(item)
+                                            if extracted:
+                                                text_items.append(extracted)
+                                    if text_items:
+                                        content_parts.append("\n".join(text_items))
+                                        break
                     
                     # Add overview if available
                     overview = doc_data.get("overview")
@@ -599,7 +648,20 @@ class GranolaMCPServer:
                         
                         # Debug: log if we couldn't find content
                         if not content:
-                            sys.stderr.write(f"Warning: No content found for meeting {doc_id} ({meeting.title}). Available fields: {list(doc_data.keys())}\n")
+                            # Show available fields and their types
+                            field_info = []
+                            for key, value in doc_data.items():
+                                value_type = type(value).__name__
+                                if isinstance(value, str):
+                                    preview = value[:100] + "..." if len(value) > 100 else value
+                                    field_info.append(f"  {key}: {value_type} = '{preview}'")
+                                elif isinstance(value, (dict, list)):
+                                    field_info.append(f"  {key}: {value_type} (len={len(value)})")
+                                else:
+                                    field_info.append(f"  {key}: {value_type} = {str(value)[:100]}")
+                            
+                            sys.stderr.write(f"Warning: No content found for meeting {doc_id} ({meeting.title})\n")
+                            sys.stderr.write(f"Available fields:\n" + "\n".join(field_info) + "\n")
                         
                 except Exception as e:
                     sys.stderr.write(f"Error extracting document content for {doc_id}: {e}\n")
