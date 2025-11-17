@@ -1752,7 +1752,7 @@ IMPORTANT: Include ALL meetings where the company could reasonably be considered
                         {"role": "user", "content": prompt}
                     ],
                     response_format={"type": "json_object"},
-                    max_tokens=1000  # Increased to allow more meeting IDs
+                    max_completion_tokens=1000  # GPT-5 uses max_completion_tokens instead of max_tokens
                     # Note: GPT-5 doesn't support custom temperature, uses default
                 )
                 
