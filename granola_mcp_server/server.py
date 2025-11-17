@@ -33,6 +33,24 @@ except ImportError:
     GOOGLE_CALENDAR_AVAILABLE = False
     Request = None
 
+# Sentence transformers for semantic search (optional)
+try:
+    from sentence_transformers import SentenceTransformer
+    import numpy as np
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    SentenceTransformer = None
+    np = None
+
+# HTTP client for Turbopuffer (optional)
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    HTTPX_AVAILABLE = False
+    httpx = None
+
 
 class GranolaMCPServer:
     """Granola MCP Server for meeting intelligence queries."""
@@ -66,6 +84,38 @@ class GranolaMCPServer:
             self.google_client_secret and 
             self.google_refresh_token
         )
+        
+        # Initialize embedding model for semantic search
+        # Using Turbopuffer for shared team vector database
+        self.embedding_model = None
+        self.turbopuffer_api_key = os.getenv("TURBOPUFFER_API_KEY")
+        self.turbopuffer_namespace = os.getenv("TURBOPUFFER_NAMESPACE", "granola-meetings")
+        self.turbopuffer_base_url = "https://api.turbopuffer.com/v1"
+        
+        # Always initialize local model for generating embeddings (needed for Turbopuffer)
+        if SENTENCE_TRANSFORMERS_AVAILABLE:
+            try:
+                # Use a lightweight, fast model optimized for semantic similarity
+                # all-MiniLM-L6-v2 is small (~80MB) and fast while being effective
+                self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            except Exception as e:
+                sys.stderr.write(f"Warning: Could not load embedding model: {e}\n")
+                self.embedding_model = None
+        
+        # Validate Turbopuffer configuration
+        self.turbopuffer_enabled = (
+            HTTPX_AVAILABLE and 
+            self.turbopuffer_api_key and 
+            self.embedding_model is not None
+        )
+        
+        if not self.turbopuffer_enabled:
+            if not HTTPX_AVAILABLE:
+                sys.stderr.write("Warning: httpx not available, install with: pip install httpx\n")
+            elif not self.turbopuffer_api_key:
+                sys.stderr.write("Warning: TURBOPUFFER_API_KEY not set\n")
+            elif not self.embedding_model:
+                sys.stderr.write("Warning: Embedding model not available\n")
             
         self._setup_handlers()
     
@@ -298,6 +348,30 @@ class GranolaMCPServer:
                         },
                         "required": ["pattern_type"]
                     }
+                ),
+                Tool(
+                    name="find_similar_companies",
+                    description="Find meetings with similar companies using semantic search. Use this to find companies in similar industries, with similar business models, or solving similar problems. Examples: 'AI for HR companies', 'recruiting platforms', 'similar to HeyMilo'",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Description of the type of company or industry to search for (e.g., 'AI recruiting companies', 'HR tech platforms', 'similar to [company name]')"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of similar meetings to return",
+                                "default": 10
+                            },
+                            "min_similarity": {
+                                "type": "number",
+                                "description": "Minimum similarity score (0-1) to include results",
+                                "default": 0.3
+                            }
+                        },
+                        "required": ["query"]
+                    }
                 )
             ]
         
@@ -322,6 +396,12 @@ class GranolaMCPServer:
                     pattern_type=arguments["pattern_type"],
                     date_range=arguments.get("date_range")
                 )
+            elif name == "find_similar_companies":
+                return await self._find_similar_companies(
+                    query=arguments["query"],
+                    limit=arguments.get("limit", 10),
+                    min_similarity=arguments.get("min_similarity", 0.3)
+                )
             else:
                 raise ValueError(f"Unknown tool: {name}")
     
@@ -329,6 +409,9 @@ class GranolaMCPServer:
         """Ensure cache data is loaded."""
         if self.cache_data is None:
             await self._load_cache()
+            # Sync meetings to Turbopuffer after loading cache
+            if self.turbopuffer_enabled:
+                await self._sync_meetings_to_turbopuffer()
     
     async def _load_cache(self):
         """Load and parse Granola cache data."""
@@ -1048,6 +1131,231 @@ class GranolaMCPServer:
             output.append(f"• **{topic}:** {count} mentions")
         
         return [TextContent(type="text", text="\n".join(output))]
+    
+    async def _upsert_to_turbopuffer(self, rows: List[Dict[str, Any]]) -> None:
+        """Upsert rows to Turbopuffer."""
+        if not self.turbopuffer_enabled:
+            return
+        
+        try:
+            url = f"{self.turbopuffer_base_url}/namespaces/{self.turbopuffer_namespace}"
+            headers = {
+                "Authorization": f"Bearer {self.turbopuffer_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            # Turbopuffer expects upsert_rows with schema
+            payload = {
+                "upsert_rows": rows,
+                "distance_metric": "cosine_distance",
+                "schema": {
+                    "text": {
+                        "type": "string",
+                        "full_text_search": True
+                    },
+                    "meeting_id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "date": {"type": "string"},
+                    "participants": {"type": "string"}
+                }
+            }
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+                
+        except Exception as e:
+            sys.stderr.write(f"Error upserting to Turbopuffer: {e}\n")
+    
+    async def _query_turbopuffer(self, query: str, limit: int = 10, min_similarity: float = 0.3) -> List[Dict[str, Any]]:
+        """Query Turbopuffer for similar meetings."""
+        if not self.turbopuffer_enabled:
+            return []
+        
+        try:
+            # Generate embedding for query
+            query_embedding = self.embedding_model.encode([query], convert_to_numpy=True)[0].tolist()
+            
+            url = f"{self.turbopuffer_base_url}/namespaces/{self.turbopuffer_namespace}/query"
+            headers = {
+                "Authorization": f"Bearer {self.turbopuffer_api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "vector": query_embedding,
+                "text_query": query,  # Hybrid search: both vector and text
+                "limit": limit,
+                "filters": {}  # Can add filters here if needed
+            }
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                
+                results = []
+                for result in data.get("results", []):
+                    # Turbopuffer returns similarity as distance, convert to similarity score
+                    # cosine_distance ranges from 0-2, where 0 is most similar
+                    # Convert to similarity: similarity = 1 - (distance / 2)
+                    distance = result.get("distance", 2.0)
+                    similarity = max(0, 1 - (distance / 2))
+                    
+                    if similarity >= min_similarity:
+                        results.append({
+                            "id": result.get("id"),
+                            "similarity": similarity,
+                            "metadata": result.get("metadata", {})
+                        })
+                
+                return results
+                
+        except Exception as e:
+            sys.stderr.write(f"Error querying Turbopuffer: {e}\n")
+            return []
+    
+    async def _sync_meetings_to_turbopuffer(self) -> None:
+        """Sync all meetings from cache to Turbopuffer."""
+        if not self.turbopuffer_enabled or not self.cache_data:
+            return
+        
+        try:
+            rows = []
+            
+            for meeting_id, meeting in self.cache_data.meetings.items():
+                # Build rich text representation for embedding
+                text_parts = [meeting.title]
+                
+                if meeting.participants:
+                    text_parts.append(f"Participants: {', '.join(meeting.participants)}")
+                
+                # Add document content if available
+                if meeting_id in self.cache_data.documents:
+                    doc = self.cache_data.documents[meeting_id]
+                    if doc.content:
+                        # Use more content for better embeddings (up to 2000 chars)
+                        content_snippet = doc.content[:2000].replace('\n', ' ')
+                        text_parts.append(f"Notes: {content_snippet}")
+                
+                # Add transcript snippet if available
+                if meeting_id in self.cache_data.transcripts:
+                    transcript = self.cache_data.transcripts[meeting_id]
+                    if transcript.content:
+                        transcript_snippet = transcript.content[:2000].replace('\n', ' ')
+                        text_parts.append(f"Transcript: {transcript_snippet}")
+                
+                meeting_text = " | ".join(text_parts)
+                
+                # Generate embedding
+                embedding = self.embedding_model.encode([meeting_text], convert_to_numpy=True)[0].tolist()
+                
+                # Prepare row for Turbopuffer
+                row = {
+                    "id": meeting_id,
+                    "vector": embedding,
+                    "text": meeting_text,
+                    "meeting_id": meeting_id,
+                    "title": meeting.title,
+                    "date": meeting.date.isoformat(),
+                    "participants": ", ".join(meeting.participants) if meeting.participants else ""
+                }
+                
+                rows.append(row)
+            
+            if rows:
+                # Upsert in batches of 100 (Turbopuffer limit)
+                batch_size = 100
+                for i in range(0, len(rows), batch_size):
+                    batch = rows[i:i + batch_size]
+                    await self._upsert_to_turbopuffer(batch)
+                
+                sys.stderr.write(f"Synced {len(rows)} meetings to Turbopuffer\n")
+                
+        except Exception as e:
+            sys.stderr.write(f"Error syncing meetings to Turbopuffer: {e}\n")
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+    
+    async def _find_similar_companies(self, query: str, limit: int = 10, min_similarity: float = 0.3) -> List[TextContent]:
+        """Find meetings with similar companies using semantic search via Turbopuffer."""
+        if not self.turbopuffer_enabled:
+            return [TextContent(
+                type="text", 
+                text="Semantic search requires Turbopuffer. Please set TURBOPUFFER_API_KEY environment variable."
+            )]
+        
+        try:
+            # Query Turbopuffer for similar meetings (searches across all team members' meetings)
+            turbopuffer_results = await self._query_turbopuffer(query, limit=limit * 2, min_similarity=min_similarity)
+            
+            if not turbopuffer_results:
+                return [TextContent(
+                    type="text", 
+                    text=f"No similar companies found matching '{query}' (minimum similarity: {min_similarity:.2f})"
+                )]
+            
+            # Get meeting details from cache for results
+            results = []
+            for result in turbopuffer_results[:limit]:
+                meeting_id = result["id"]
+                similarity_score = result["similarity"]
+                metadata = result.get("metadata", {})
+                
+                # Try to get meeting from local cache first
+                meeting = None
+                if self.cache_data and meeting_id in self.cache_data.meetings:
+                    meeting = self.cache_data.meetings[meeting_id]
+                else:
+                    # Meeting is from another team member, use metadata
+                    from datetime import datetime
+                    meeting = MeetingMetadata(
+                        id=meeting_id,
+                        title=metadata.get("title", "Unknown Meeting"),
+                        date=datetime.fromisoformat(metadata.get("date", "2000-01-01T00:00:00")),
+                        participants=metadata.get("participants", "").split(", ") if metadata.get("participants") else [],
+                        meeting_type=None,
+                        platform=None
+                    )
+                
+                results.append((similarity_score, meeting_id, meeting, metadata))
+            
+            if not results:
+                return [TextContent(
+                    type="text", 
+                    text=f"No similar companies found matching '{query}' (minimum similarity: {min_similarity:.2f})"
+                )]
+            
+            # Format results
+            output = [f"# Similar Companies Found (Team-Wide Search)\n\n"]
+            output.append(f"Query: **{query}**\n")
+            output.append(f"Found {len(results)} similar meeting(s) across all team members:\n\n")
+            
+            for similarity_score, meeting_id, meeting, metadata in results:
+                output.append(f"## {meeting.title}")
+                output.append(f"**Similarity:** {similarity_score:.2%}")
+                output.append(f"**Date:** {self._format_local_time(meeting.date)}")
+                output.append(f"**ID:** {meeting_id}")
+                
+                if meeting.participants:
+                    output.append(f"**Participants:** {', '.join(meeting.participants)}")
+                
+                # Add note if meeting is from another team member
+                if meeting_id not in (self.cache_data.meetings if self.cache_data else {}):
+                    output.append(f"*Note: This meeting is from another team member*")
+                
+                output.append("")
+            
+            return [TextContent(type="text", text="\n".join(output))]
+            
+        except Exception as e:
+            sys.stderr.write(f"Error in semantic search: {e}\n")
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            return [TextContent(
+                type="text", 
+                text=f"Error performing similarity search: {str(e)}"
+            )]
     
     def run(self, transport_type: str = "stdio"):
         """Run the server."""
