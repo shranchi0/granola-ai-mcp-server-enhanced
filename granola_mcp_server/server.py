@@ -1732,11 +1732,12 @@ Return JSON: {{"meeting_id": ["category1", "category2"], ...}}"""
                 "end_date": now.strftime("%Y-%m-%d")
             }
         
-        # Trigger classification if needed (on first category search)
+        # Trigger classification in background if needed (non-blocking)
         if self.openai_client and not self._classification_cache:
-            sys.stderr.write("No classifications found - starting classification now...\n")
-            # Run classification synchronously for first query (will be fast for subsequent queries)
-            await self._classify_meetings_background(self.cache_data)
+            sys.stderr.write("No classifications found - starting background classification...\n")
+            # Run in background - don't await (non-blocking)
+            import asyncio
+            asyncio.create_task(self._classify_meetings_background(self.cache_data))
         
         # FAST PATH: Use pre-classified tags if available
         category_lower = category.lower()
@@ -1810,6 +1811,7 @@ Return JSON: {{"meeting_id": ["category1", "category2"], ...}}"""
         
         matching_ids = None
         
+        # If no tags found and no GPT cache, fall back to GPT analysis
         try:
             # Filter meetings by date range
             meetings_to_analyze = []
