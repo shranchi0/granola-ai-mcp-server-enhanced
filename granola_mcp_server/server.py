@@ -672,29 +672,62 @@ class GranolaMCPServer:
         return cache_data
     
     def _extract_structured_notes(self, notes_data: Dict[str, Any]) -> str:
-        """Extract text content from Granola's structured notes format."""
+        """Extract text content from Granola's structured notes format (ProseMirror/TipTap)."""
         try:
-            if not isinstance(notes_data, dict) or 'content' not in notes_data:
+            if not isinstance(notes_data, dict):
                 return ""
             
             def extract_text_from_content(content_list):
+                """Recursively extract text from ProseMirror/TipTap structure."""
                 text_parts = []
                 if isinstance(content_list, list):
                     for item in content_list:
                         if isinstance(item, dict):
-                            # Handle different content types
-                            if item.get('type') == 'paragraph' and 'content' in item:
-                                text_parts.append(extract_text_from_content(item['content']))
-                            elif item.get('type') == 'text' and 'text' in item:
+                            item_type = item.get('type', '')
+                            
+                            # Direct text node
+                            if item_type == 'text' and 'text' in item:
                                 text_parts.append(item['text'])
+                            
+                            # Paragraph, heading, or other block with nested content
                             elif 'content' in item:
-                                text_parts.append(extract_text_from_content(item['content']))
+                                nested_text = extract_text_from_content(item['content'])
+                                if nested_text:
+                                    text_parts.append(nested_text)
+                            
+                            # Some nodes have text directly
+                            elif 'text' in item and isinstance(item['text'], str):
+                                text_parts.append(item['text'])
+                            
+                            # Check attrs for text (sometimes text is in attributes)
+                            elif 'attrs' in item and isinstance(item['attrs'], dict):
+                                for attr_key in ['text', 'content', 'data']:
+                                    if attr_key in item['attrs']:
+                                        attr_value = item['attrs'][attr_key]
+                                        if isinstance(attr_value, str) and attr_value.strip():
+                                            text_parts.append(attr_value)
+                            
+                            # Recursively check all dict values
+                            else:
+                                for value in item.values():
+                                    if isinstance(value, (dict, list)):
+                                        nested_text = extract_text_from_content(value if isinstance(value, list) else [value])
+                                        if nested_text:
+                                            text_parts.append(nested_text)
+                
                 return ' '.join(text_parts)
             
-            return extract_text_from_content(notes_data['content'])
+            # Handle both direct content and nested structure
+            if 'content' in notes_data:
+                return extract_text_from_content(notes_data['content'])
+            else:
+                # Try to extract from the whole structure
+                return extract_text_from_content([notes_data])
             
         except Exception as e:
             sys.stderr.write(f"Error extracting structured notes: {e}\n")
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             return ""
     
     def _parse_date_query(self, query: str) -> Optional[Tuple[datetime, datetime]]:
