@@ -1,8 +1,8 @@
 # Granola MCP Server (Enhanced)
 
-An enhanced Model Context Protocol (MCP) server for integrating Granola.ai meeting intelligence with Claude Desktop. This fork adds intelligent date parsing, Google Calendar integration, and improved meeting search capabilities.
+An enhanced Model Context Protocol (MCP) server for integrating Granola.ai meeting intelligence with Claude Desktop. Features intelligent date parsing, Google Calendar integration, and unified meeting search capabilities.
 
-**Forked from:** [proofgeist/granola-ai-mcp-server](https://github.com/proofgeist/granola-ai-mcp-server)
+> **Note**: This project is based on [proofgeist/granola-ai-mcp-server](https://github.com/proofgeist/granola-ai-mcp-server) with significant enhancements for date-aware search and Google Calendar integration.
 
 ## 🆕 Enhanced Features
 
