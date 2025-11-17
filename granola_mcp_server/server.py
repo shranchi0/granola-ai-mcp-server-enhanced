@@ -287,13 +287,13 @@ class GranolaMCPServer:
             return [
                 Tool(
                     name="search_meetings",
-                    description="Search meetings by title, content, or participants",
+                    description="Search meetings with natural language date queries or keywords. Supports date queries like 'Friday last week', 'this week', 'last week', 'November 2025', 'today', 'yesterday'. For 'Friday last week', it finds meetings on the Friday of the previous week (e.g., if today is Monday Nov 17, 'Friday last week' means Nov 14).",
                     inputSchema={
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "Search query for meetings"
+                                "description": "Search query - supports natural language date queries like 'Friday last week', 'this week', 'last week', 'November 2025', 'today', 'yesterday', or keyword search. IMPORTANT: For queries like 'who did I meet on Friday last week', use the date query directly: 'Friday last week'"
                             },
                             "limit": {
                                 "type": "integer", 
