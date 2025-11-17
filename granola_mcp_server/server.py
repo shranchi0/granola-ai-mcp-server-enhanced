@@ -1593,12 +1593,13 @@ Return a JSON array of meeting IDs that match, ordered by relevance. Only includ
 Meeting data:
 {json.dumps(meeting_contexts, indent=2, default=str)}
 
-Return ONLY a JSON array of meeting IDs, like: ["id1", "id2", "id3"]"""
+Return a JSON object with a "meeting_ids" array containing the matching meeting IDs, ordered by relevance.
+Example: {{"meeting_ids": ["id1", "id2", "id3"]}}"""
 
             response = self.openai_client.chat.completions.create(
                 model="gpt-4o-mini",  # Using mini for cost efficiency, can upgrade to gpt-4o if needed
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON."},
+                    {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
@@ -1609,11 +1610,10 @@ Return ONLY a JSON array of meeting IDs, like: ["id1", "id2", "id3"]"""
             result_text = response.choices[0].message.content
             try:
                 result_data = json.loads(result_text)
-                # GPT might return {"meetings": [...]} or just [...]
-                if isinstance(result_data, dict):
-                    matching_ids = result_data.get("meetings", result_data.get("meeting_ids", []))
-                else:
-                    matching_ids = result_data if isinstance(result_data, list) else []
+                # GPT should return {"meeting_ids": [...]}
+                matching_ids = result_data.get("meeting_ids", result_data.get("meetings", []))
+                if not isinstance(matching_ids, list):
+                    matching_ids = []
             except json.JSONDecodeError:
                 # Fallback: try to extract IDs from text
                 import re
