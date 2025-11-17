@@ -1612,7 +1612,27 @@ class GranolaMCPServer:
                 "end_date": now.strftime("%Y-%m-%d")
             }
         
-        # Cache check moved earlier for fast path
+        # Fast path: Check cache FIRST before any processing
+        cache_key = f"{category}_{date_range.get('start_date', '')}_{date_range.get('end_date', '')}"
+        if cache_key in self._gpt_category_cache:
+            matching_ids = self._gpt_category_cache[cache_key]
+            # Return cached results immediately (much faster)
+            if matching_ids:
+                results = []
+                for meeting_id in matching_ids[:limit]:
+                    if meeting_id in self.cache_data.meetings:
+                        meeting = self.cache_data.meetings[meeting_id]
+                        results.append((meeting_id, meeting))
+                
+                if results:
+                    output = [f"# Companies Matching: {category}\n\n"]
+                    output.append(f"Found {len(results)} company/companies:\n\n")
+                    for meeting_id, meeting in results:
+                        output.append(f"## {meeting.title}")
+                        output.append(f"**Date:** {self._format_local_time(meeting.date)}")
+                        output.append(f"**ID:** {meeting_id}\n")
+                    return [TextContent(type="text", text="\n".join(output))]
+        
         matching_ids = None
         
         try:
