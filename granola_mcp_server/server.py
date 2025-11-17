@@ -1576,8 +1576,9 @@ class GranolaMCPServer:
                 )]
             
             # Build context for GPT - include meeting titles, participants, and available content
+            # Don't limit the number of meetings analyzed - let GPT see all of them
             meeting_contexts = []
-            for meeting_id, meeting in meetings_to_analyze[:limit * 2]:  # Analyze more than limit to get better results
+            for meeting_id, meeting in meetings_to_analyze:  # Analyze all meetings in date range
                 context = {
                     "id": meeting_id,
                     "title": meeting.title,
@@ -1622,11 +1623,11 @@ Example: {{"meeting_ids": ["id1", "id2", "id3"]}}"""
             response = self.openai_client.chat.completions.create(
                 model="gpt-5",  # Using GPT-5 for best intelligence and accuracy
                 messages=[
-                    {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array."},
+                    {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array. Return ALL companies that match the category, not just one."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,
                 response_format={"type": "json_object"}
+                # Note: GPT-5 doesn't support custom temperature, uses default
             )
             
             # Parse GPT response
