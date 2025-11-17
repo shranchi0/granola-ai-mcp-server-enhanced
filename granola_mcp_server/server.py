@@ -136,7 +136,12 @@ class GranolaMCPServer:
                 self.openai_client = None
         elif OPENAI_AVAILABLE and not self.openai_api_key:
             sys.stderr.write("Warning: OPENAI_API_KEY not set - intelligent search will be unavailable\n")
-            
+        
+        # Performance optimizations: cache for date conversions and GPT results
+        self._date_conversion_cache: Dict[str, datetime] = {}
+        self._gpt_category_cache: Dict[str, List[str]] = {}
+        self._turbopuffer_sync_in_progress = False
+        
         self._setup_handlers()
     
     def _detect_local_timezone(self):
@@ -266,12 +271,21 @@ class GranolaMCPServer:
             return []
     
     def _convert_to_local_time(self, utc_datetime: datetime) -> datetime:
-        """Convert UTC datetime to local timezone."""
+        """Convert UTC datetime to local timezone (cached for performance)."""
+        # Use cache key based on datetime string to avoid repeated conversions
+        cache_key = f"{utc_datetime.isoformat()}_{self.local_timezone}"
+        if cache_key in self._date_conversion_cache:
+            return self._date_conversion_cache[cache_key]
+        
         if utc_datetime.tzinfo is None:
             # Assume UTC if no timezone info
             utc_datetime = utc_datetime.replace(tzinfo=zoneinfo.ZoneInfo('UTC'))
         
-        return utc_datetime.astimezone(self.local_timezone)
+        local_dt = utc_datetime.astimezone(self.local_timezone)
+        # Cache result (limit cache size to avoid memory issues)
+        if len(self._date_conversion_cache) < 1000:
+            self._date_conversion_cache[cache_key] = local_dt
+        return local_dt
     
     def _format_local_time(self, utc_datetime: datetime) -> str:
         """Format datetime in local timezone for display."""
@@ -462,9 +476,11 @@ class GranolaMCPServer:
         """Ensure cache data is loaded."""
         if self.cache_data is None:
             await self._load_cache()
-            # Sync meetings to Turbopuffer after loading cache
+            # Sync meetings to Turbopuffer in background (non-blocking)
             if self.turbopuffer_enabled:
-                await self._sync_meetings_to_turbopuffer()
+                # Don't await - let it run in background
+                import asyncio
+                asyncio.create_task(self._sync_meetings_to_turbopuffer())
     
     async def _load_cache(self):
         """Load and parse Granola cache data."""
@@ -902,8 +918,14 @@ class GranolaMCPServer:
             
             # If date range is specified, check if meeting falls within range
             if date_range:
-                meeting_local_date = self._convert_to_local_time(meeting.date)
-                if date_range[0] <= meeting_local_date <= date_range[1]:
+                # Optimize: check timezone-aware date directly if possible
+                meeting_date = meeting.date
+                if meeting_date.tzinfo is None:
+                    meeting_date = meeting_date.replace(tzinfo=self.local_timezone)
+                elif meeting_date.tzinfo != self.local_timezone:
+                    meeting_date = self._convert_to_local_time(meeting_date)
+                
+                if date_range[0] <= meeting_date <= date_range[1]:
                     score += 10  # High score for date matches
                 else:
                     continue  # Skip meetings outside date range
@@ -953,8 +975,14 @@ class GranolaMCPServer:
             
             # Separate past and upcoming meetings within this week
             for score, meeting in results:
-                meeting_local_date = self._convert_to_local_time(meeting.date)
-                if meeting_local_date < now:
+                # Optimize: check timezone-aware date directly
+                meeting_date = meeting.date
+                if meeting_date.tzinfo is None:
+                    meeting_date = meeting_date.replace(tzinfo=self.local_timezone)
+                elif meeting_date.tzinfo != self.local_timezone:
+                    meeting_date = self._convert_to_local_time(meeting_date)
+                
+                if meeting_date < now:
                     past_this_week.append((score, meeting))
                 else:
                     upcoming_this_week.append((score, meeting))
@@ -1481,6 +1509,8 @@ class GranolaMCPServer:
             sys.stderr.write(f"Error syncing meetings to Turbopuffer: {e}\n")
             import traceback
             traceback.print_exc(file=sys.stderr)
+        finally:
+            self._turbopuffer_sync_in_progress = False
     
     async def _find_similar_companies(self, query: str, limit: int = 10, min_similarity: float = 0.3) -> List[TextContent]:
         """Find meetings with similar companies using semantic search via Turbopuffer."""
@@ -1626,8 +1656,9 @@ class GranolaMCPServer:
                 
                 meeting_contexts.append(context)
             
-            # Use GPT to analyze which meetings match the category
-            prompt = f"""You are analyzing meeting records to find companies that match a specific category.
+            # Use GPT to analyze which meetings match the category (only if not cached)
+            if matching_ids is None:
+                prompt = f"""You are analyzing meeting records to find companies that match a specific category.
 
 Category to find: {category}
 
@@ -1648,28 +1679,31 @@ Example: {{"meeting_ids": ["id1", "id2", "id3", "id4", "id5"]}}
 
 If multiple companies match, include them all."""
 
-            response = self.openai_client.chat.completions.create(
-                model="gpt-5",  # Using GPT-5 for best intelligence and accuracy
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array. Return ALL companies that match the category, not just one."},
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={"type": "json_object"}
-                # Note: GPT-5 doesn't support custom temperature, uses default
-            )
-            
-            # Parse GPT response
-            result_text = response.choices[0].message.content
-            try:
-                result_data = json.loads(result_text)
-                # GPT should return {"meeting_ids": [...]}
-                matching_ids = result_data.get("meeting_ids", result_data.get("meetings", []))
-                if not isinstance(matching_ids, list):
-                    matching_ids = []
-            except json.JSONDecodeError:
-                # Fallback: try to extract IDs from text
-                import re
-                matching_ids = re.findall(r'["\']([a-f0-9-]{36})["\']', result_text)
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-5",  # Using GPT-5 for best intelligence and accuracy
+                    messages=[
+                        {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array. Return ALL companies that match the category, not just one."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"}
+                    # Note: GPT-5 doesn't support custom temperature, uses default
+                )
+                
+                # Parse GPT response
+                result_text = response.choices[0].message.content
+                try:
+                    result_data = json.loads(result_text)
+                    # GPT should return {"meeting_ids": [...]}
+                    matching_ids = result_data.get("meeting_ids", result_data.get("meetings", []))
+                    if not isinstance(matching_ids, list):
+                        matching_ids = []
+                    # Cache the result
+                    if len(self._gpt_category_cache) < 100:  # Limit cache size
+                        self._gpt_category_cache[cache_key] = matching_ids
+                except json.JSONDecodeError:
+                    # Fallback: try to extract IDs from text
+                    import re
+                    matching_ids = re.findall(r'["\']([a-f0-9-]{36})["\']', result_text)
             
             # Get meeting details for matches
             results = []
