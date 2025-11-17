@@ -270,9 +270,14 @@ The server reads from Granola's cache file at:
 
 ## License
 
-MIT License (same as original)
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Credits
 
-- Original work by [proofgeist](https://github.com/proofgeist/granola-ai-mcp-server)
-- Enhanced with date parsing and Google Calendar integration
+This project is based on [proofgeist/granola-ai-mcp-server](https://github.com/proofgeist/granola-ai-mcp-server) and includes the following enhancements:
+
+- Intelligent date parsing ("this week", "last week", month/year queries)
+- Google Calendar integration for upcoming meetings
+- Unified view of past (Granola) and upcoming (Calendar) meetings
+- Enhanced timezone handling and error recovery
+- Improved search result organization
