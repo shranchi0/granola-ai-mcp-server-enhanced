@@ -1443,17 +1443,17 @@ class GranolaMCPServer:
             return []
     
     async def _sync_meetings_to_turbopuffer(self) -> None:
-        """Sync all meetings from cache to Turbopuffer."""
-        if not self.turbopuffer_enabled:
-            sys.stderr.write("Turbopuffer not enabled, skipping sync\n")
+        """Sync all meetings from cache to Turbopuffer (runs in background, non-blocking)."""
+        if not self.turbopuffer_enabled or not self.cache_data:
             return
         
-        if not self.cache_data:
-            sys.stderr.write("No cache data available, skipping Turbopuffer sync\n")
+        # Prevent multiple simultaneous syncs
+        if self._turbopuffer_sync_in_progress:
             return
         
+        self._turbopuffer_sync_in_progress = True
         try:
-            sys.stderr.write(f"Starting sync to Turbopuffer namespace '{self.turbopuffer_namespace}'...\n")
+            sys.stderr.write(f"Starting background sync to Turbopuffer namespace '{self.turbopuffer_namespace}'...\n")
             rows = []
             
             for meeting_id, meeting in self.cache_data.meetings.items():
