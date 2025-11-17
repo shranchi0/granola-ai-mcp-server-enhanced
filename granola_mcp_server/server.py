@@ -816,6 +816,26 @@ class GranolaMCPServer:
             end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
             return (start, end)
         
+        # Handle "Friday last week", "Monday last week", etc.
+        day_pattern = r'(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)'
+        day_match = re.search(day_pattern, query_lower)
+        if day_match and "last week" in query_lower:
+            days_since_monday = now.weekday()
+            last_monday = (now - timedelta(days=days_since_monday + 7)).replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            day_name = day_match.group(1).lower()
+            day_map = {
+                'monday': 0, 'mon': 0, 'tuesday': 1, 'tue': 1, 'wednesday': 2, 'wed': 2,
+                'thursday': 3, 'thu': 3, 'friday': 4, 'fri': 4,
+                'saturday': 5, 'sat': 5, 'sunday': 6, 'sun': 6
+            }
+            target_day = day_map.get(day_name, 4)  # Default to Friday
+            
+            target_date = last_monday + timedelta(days=target_day)
+            start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            end = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return (start, end)
+        
         # Handle month queries like "November 2025", "Nov 2025", "November"
         month_pattern = r'(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s*(\d{4})?'
         month_match = re.search(month_pattern, query_lower)
