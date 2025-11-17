@@ -1732,6 +1732,12 @@ Return JSON: {{"meeting_id": ["category1", "category2"], ...}}"""
                 "end_date": now.strftime("%Y-%m-%d")
             }
         
+        # Trigger classification if needed (on first category search)
+        if self.openai_client and not self._classification_cache:
+            sys.stderr.write("No classifications found - starting classification now...\n")
+            # Run classification synchronously for first query (will be fast for subsequent queries)
+            await self._classify_meetings_background(self.cache_data)
+        
         # FAST PATH: Use pre-classified tags if available
         category_lower = category.lower()
         matching_ids = []
