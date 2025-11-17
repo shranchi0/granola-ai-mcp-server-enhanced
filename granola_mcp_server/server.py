@@ -1751,9 +1751,9 @@ IMPORTANT: Include ALL meetings where the company could reasonably be considered
                         {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON with a 'meeting_ids' array. Return ALL companies that match the category, not just one. Be thorough and inclusive - include all matches, not just the most obvious ones."},
                         {"role": "user", "content": prompt}
                     ],
-                    response_format={"type": "json_object"},
-                    max_completion_tokens=1000  # GPT-5 uses max_completion_tokens instead of max_tokens
+                    response_format={"type": "json_object"}
                     # Note: GPT-5 doesn't support custom temperature, uses default
+                    # No max_completion_tokens limit - let GPT return all matching companies
                 )
                 
                 # Parse GPT response
