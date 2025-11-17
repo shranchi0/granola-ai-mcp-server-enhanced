@@ -51,6 +51,14 @@ except ImportError:
     HTTPX_AVAILABLE = False
     httpx = None
 
+# OpenAI for intelligent analysis (optional)
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAI = None
+
 
 class GranolaMCPServer:
     """Granola MCP Server for meeting intelligence queries."""
@@ -116,6 +124,18 @@ class GranolaMCPServer:
                 sys.stderr.write("Warning: TURBOPUFFER_API_KEY not set\n")
             elif not self.embedding_model:
                 sys.stderr.write("Warning: Embedding model not available\n")
+        
+        # Initialize OpenAI client for intelligent analysis
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self.openai_client = None
+        if OPENAI_AVAILABLE and self.openai_api_key:
+            try:
+                self.openai_client = OpenAI(api_key=self.openai_api_key)
+            except Exception as e:
+                sys.stderr.write(f"Warning: Could not initialize OpenAI client: {e}\n")
+                self.openai_client = None
+        elif OPENAI_AVAILABLE and not self.openai_api_key:
+            sys.stderr.write("Warning: OPENAI_API_KEY not set - intelligent search will be unavailable\n")
             
         self._setup_handlers()
     
@@ -372,6 +392,33 @@ class GranolaMCPServer:
                         },
                         "required": ["query"]
                     }
+                ),
+                Tool(
+                    name="search_companies_by_category",
+                    description="Intelligently search for companies by category using AI analysis. This uses GPT to understand what type of companies you're looking for and analyzes meeting content to find matches. Examples: 'devtools companies', 'AI companies', 'HR tech companies', 'fintech startups'. Much more intelligent than keyword search.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "category": {
+                                "type": "string",
+                                "description": "Category or type of companies to find (e.g., 'devtools', 'AI companies', 'HR tech', 'fintech', 'SaaS companies')"
+                            },
+                            "date_range": {
+                                "type": "object",
+                                "properties": {
+                                    "start_date": {"type": "string", "format": "date"},
+                                    "end_date": {"type": "string", "format": "date"}
+                                },
+                                "description": "Optional date range to filter meetings (e.g., last 2 weeks, last month)"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of companies to return",
+                                "default": 20
+                            }
+                        },
+                        "required": ["category"]
+                    }
                 )
             ]
         
@@ -401,6 +448,12 @@ class GranolaMCPServer:
                     query=arguments["query"],
                     limit=arguments.get("limit", 10),
                     min_similarity=arguments.get("min_similarity", 0.3)
+                )
+            elif name == "search_companies_by_category":
+                return await self._search_companies_by_category(
+                    category=arguments["category"],
+                    date_range=arguments.get("date_range"),
+                    limit=arguments.get("limit", 20)
                 )
             else:
                 raise ValueError(f"Unknown tool: {name}")
@@ -1469,6 +1522,146 @@ class GranolaMCPServer:
             return [TextContent(
                 type="text", 
                 text=f"Error performing similarity search: {str(e)}"
+            )]
+    
+    async def _search_companies_by_category(self, category: str, date_range: Optional[Dict] = None, limit: int = 20) -> List[TextContent]:
+        """Intelligently search for companies by category using GPT analysis."""
+        if not self.openai_client:
+            return [TextContent(
+                type="text",
+                text="Intelligent search requires OpenAI API. Please set OPENAI_API_KEY environment variable."
+            )]
+        
+        if not self.cache_data or not self.cache_data.meetings:
+            return [TextContent(type="text", text="No meetings found in cache")]
+        
+        try:
+            # Filter meetings by date range if provided
+            meetings_to_analyze = []
+            for meeting_id, meeting in self.cache_data.meetings.items():
+                if date_range:
+                    start_date = datetime.fromisoformat(date_range.get("start_date", "1900-01-01"))
+                    end_date = datetime.fromisoformat(date_range.get("end_date", "2100-01-01"))
+                    if not (start_date <= meeting.date <= end_date):
+                        continue
+                meetings_to_analyze.append((meeting_id, meeting))
+            
+            if not meetings_to_analyze:
+                return [TextContent(
+                    type="text",
+                    text=f"No meetings found in the specified date range"
+                )]
+            
+            # Build context for GPT - include meeting titles, participants, and available content
+            meeting_contexts = []
+            for meeting_id, meeting in meetings_to_analyze[:limit * 2]:  # Analyze more than limit to get better results
+                context = {
+                    "id": meeting_id,
+                    "title": meeting.title,
+                    "date": meeting.date.isoformat(),
+                    "participants": meeting.participants
+                }
+                
+                # Add document content if available
+                if meeting_id in self.cache_data.documents:
+                    doc = self.cache_data.documents[meeting_id]
+                    if doc.content:
+                        context["notes"] = doc.content[:2000]  # Limit to avoid token limits
+                
+                # Add transcript snippet if available
+                if meeting_id in self.cache_data.transcripts:
+                    transcript = self.cache_data.transcripts[meeting_id]
+                    if transcript.content:
+                        context["transcript"] = transcript.content[:2000]
+                
+                meeting_contexts.append(context)
+            
+            # Use GPT to analyze which meetings match the category
+            prompt = f"""You are analyzing meeting records to find companies that match a specific category.
+
+Category to find: {category}
+
+For each meeting, determine if the company discussed matches this category. Consider:
+- The company's product/service
+- Their target market
+- Their business model
+- Industry/vertical
+- Technology stack (if relevant)
+
+Return a JSON array of meeting IDs that match, ordered by relevance. Only include meetings where you're confident the company matches the category.
+
+Meeting data:
+{json.dumps(meeting_contexts, indent=2, default=str)}
+
+Return ONLY a JSON array of meeting IDs, like: ["id1", "id2", "id3"]"""
+
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",  # Using mini for cost efficiency, can upgrade to gpt-4o if needed
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that analyzes business meetings to categorize companies. Always return valid JSON."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse GPT response
+            result_text = response.choices[0].message.content
+            try:
+                result_data = json.loads(result_text)
+                # GPT might return {"meetings": [...]} or just [...]
+                if isinstance(result_data, dict):
+                    matching_ids = result_data.get("meetings", result_data.get("meeting_ids", []))
+                else:
+                    matching_ids = result_data if isinstance(result_data, list) else []
+            except json.JSONDecodeError:
+                # Fallback: try to extract IDs from text
+                import re
+                matching_ids = re.findall(r'["\']([a-f0-9-]{36})["\']', result_text)
+            
+            # Get meeting details for matches
+            results = []
+            for meeting_id in matching_ids[:limit]:
+                if meeting_id in self.cache_data.meetings:
+                    meeting = self.cache_data.meetings[meeting_id]
+                    results.append(meeting)
+            
+            if not results:
+                return [TextContent(
+                    type="text",
+                    text=f"No companies found matching '{category}' in the specified date range"
+                )]
+            
+            # Format results
+            output = [f"# Companies Matching: {category}\n\n"]
+            output.append(f"Found {len(results)} company/companies:\n\n")
+            
+            for meeting in results:
+                output.append(f"## {meeting.title}")
+                output.append(f"**Date:** {self._format_local_time(meeting.date)}")
+                output.append(f"**ID:** {meeting.id}")
+                
+                if meeting.participants:
+                    output.append(f"**Participants:** {', '.join(meeting.participants)}")
+                
+                # Add notes/transcript preview if available
+                if meeting.id in self.cache_data.documents:
+                    doc = self.cache_data.documents[meeting.id]
+                    if doc.content:
+                        preview = doc.content[:300].replace('\n', ' ')
+                        output.append(f"**Notes preview:** {preview}...")
+                
+                output.append("")
+            
+            return [TextContent(type="text", text="\n".join(output))]
+            
+        except Exception as e:
+            sys.stderr.write(f"Error in intelligent category search: {e}\n")
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            return [TextContent(
+                type="text",
+                text=f"Error performing intelligent search: {str(e)}"
             )]
     
     def run(self, transport_type: str = "stdio"):
