@@ -1603,14 +1603,23 @@ class GranolaMCPServer:
         if not self.cache_data or not self.cache_data.meetings:
             return [TextContent(type="text", text="No meetings found in cache")]
         
+        # Default to last month if no date range provided (matching Granola's behavior)
+        if date_range is None:
+            now = datetime.now(self.local_timezone)
+            one_month_ago = now - timedelta(days=30)
+            date_range = {
+                "start_date": one_month_ago.strftime("%Y-%m-%d"),
+                "end_date": now.strftime("%Y-%m-%d")
+            }
+        
         # Check cache first (cache key includes category and date range)
-        cache_key = f"{category}_{date_range.get('start_date', '')}_{date_range.get('end_date', '')}" if date_range else category
+        cache_key = f"{category}_{date_range.get('start_date', '')}_{date_range.get('end_date', '')}"
         matching_ids = None
         if cache_key in self._gpt_category_cache:
             matching_ids = self._gpt_category_cache[cache_key]
         
         try:
-            # Filter meetings by date range if provided
+            # Filter meetings by date range
             meetings_to_analyze = []
             for meeting_id, meeting in self.cache_data.meetings.items():
                 if date_range:
@@ -1637,10 +1646,10 @@ class GranolaMCPServer:
                     text=f"No meetings found in the specified date range"
                 )]
             
-            # Build context for GPT - optimize: limit to 50 most recent meetings for faster processing
+            # Build context for GPT - include all meetings in date range (up to 100 for performance)
             meeting_contexts = []
-            # Sort by date (most recent first) and limit to 50 meetings for GPT analysis
-            sorted_meetings = sorted(meetings_to_analyze, key=lambda x: x[1].date, reverse=True)[:50]
+            # Sort by date (most recent first) and limit to 100 meetings for GPT analysis
+            sorted_meetings = sorted(meetings_to_analyze, key=lambda x: x[1].date, reverse=True)[:100]
             
             for meeting_id, meeting in sorted_meetings:
                 context = {
@@ -1650,17 +1659,17 @@ class GranolaMCPServer:
                     "participants": meeting.participants
                 }
                 
-                # Add document content if available (optimized: reasonable limit for speed)
+                # Add document content if available (increased for better categorization)
                 if meeting_id in self.cache_data.documents:
                     doc = self.cache_data.documents[meeting_id]
                     if doc.content:
-                        context["notes"] = doc.content[:3000]  # Reduced for faster processing
+                        context["notes"] = doc.content[:6000]  # Increased for better analysis
                 
-                # Add transcript snippet if available (optimized: reasonable limit for speed)
+                # Add transcript snippet if available (increased for better categorization)
                 if meeting_id in self.cache_data.transcripts:
                     transcript = self.cache_data.transcripts[meeting_id]
                     if transcript.content:
-                        context["transcript"] = transcript.content[:3000]  # Reduced for faster processing
+                        context["transcript"] = transcript.content[:6000]  # Increased for better analysis
                 
                 meeting_contexts.append(context)
             
@@ -1676,16 +1685,25 @@ For each meeting, determine if the company discussed matches this category. Cons
 - Their business model
 - Industry/vertical
 - Technology stack (if relevant)
+- Developer tools, infrastructure, platforms, SDKs, APIs
+- Any tools or platforms that developers or engineers would use
 
-CRITICAL: Return ALL companies that match this category, not just one. Include every meeting where the company matches the category description. Be thorough and comprehensive.
+IMPORTANT: Be INCLUSIVE and broad in your interpretation. Include:
+- Pure developer tools (e.g., debugging platforms, CI/CD, testing tools)
+- Developer infrastructure (e.g., control planes, governance platforms)
+- Developer-adjacent platforms (e.g., workflow orchestrators, AI development tools)
+- Platforms with developer SDKs or APIs
+- Any company that builds tools primarily for developers/engineers
+
+CRITICAL: Return ALL companies that match this category, not just one. Include every meeting where the company matches the category description. Be thorough and comprehensive. If a company could reasonably be considered a devtools company (or the requested category), include it.
 
 Meeting data:
 {json.dumps(meeting_contexts, indent=2, default=str)}
 
 Return a JSON object with a "meeting_ids" array containing ALL matching meeting IDs, ordered by relevance (most relevant first).
-Example: {{"meeting_ids": ["id1", "id2", "id3", "id4", "id5"]}}
+Example: {{"meeting_ids": ["id1", "id2", "id3", "id4", "id5", "id6", "id7"]}}
 
-If multiple companies match, include them all."""
+If multiple companies match, include them all. Be generous in your categorization."""
 
                 response = self.openai_client.chat.completions.create(
                     model="gpt-5",  # Using GPT-5 for best intelligence and accuracy
