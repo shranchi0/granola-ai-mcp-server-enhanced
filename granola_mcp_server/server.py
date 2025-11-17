@@ -1192,9 +1192,21 @@ class GranolaMCPServer:
         
         # Filter by date range if provided
         if date_range:
-            start_date = datetime.fromisoformat(date_range.get("start_date", "1900-01-01"))
-            end_date = datetime.fromisoformat(date_range.get("end_date", "2100-01-01"))
-            meetings = [m for m in meetings if start_date <= m.date <= end_date]
+            start_date_str = date_range.get("start_date", "1900-01-01")
+            end_date_str = date_range.get("end_date", "2100-01-01")
+            
+            # Parse dates and ensure they're timezone-aware
+            start_date = datetime.fromisoformat(start_date_str).replace(tzinfo=self.local_timezone)
+            end_date = datetime.fromisoformat(end_date_str).replace(hour=23, minute=59, second=59, tzinfo=self.local_timezone)
+            
+            filtered_meetings = []
+            for m in meetings:
+                meeting_date = m.date
+                if meeting_date.tzinfo is None:
+                    meeting_date = meeting_date.replace(tzinfo=self.local_timezone)
+                if start_date <= meeting_date <= end_date:
+                    filtered_meetings.append(m)
+            meetings = filtered_meetings
         
         if pattern_type == "participants":
             return await self._analyze_participant_patterns(meetings)
